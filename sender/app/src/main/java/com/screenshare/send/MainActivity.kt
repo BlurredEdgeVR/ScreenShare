@@ -227,7 +227,12 @@ class MainActivity : Activity() {
         root.addView(ctlSection)
         root.addView(controlsRow)
         rootLayout = root
-        setContentView(root)
+        // Scrolls, so the controls stay reachable when the phone is sideways in a car mount.
+        setContentView(android.widget.ScrollView(this).apply {
+            isFillViewport = true
+            setBackgroundColor(0xFF241432.toInt())
+            addView(root)
+        })
 
         deviceButton.setOnClickListener { showDevicePicker() }
         pickButton.setOnClickListener { pickVideo() }

@@ -46,6 +46,16 @@ to act like a slow car.
 - Added **Landscape** (1280 px wide, 24 fps, 3 Mbps) and **Landscape light** (960 px wide, 20 fps,
   1.8 Mbps). They always send a sideways picture, so Waze turned sideways fills the car screen.
   Tidal and other upright apps show in the middle with bars on both sides.
+- Landscape test with Waze: with the whole screen shared and the phone upright, Waze shows in the
+  middle with bars. Waze ignores forced rotation from adb and follows the motion sensor, so
+  auto-rotate must be on and the phone physically turned.
+- "Share one app" → Waze, phone sideways: Waze fills the 1280×590 frame edge to edge, with no
+  status bar or notifications. When Waze is left (home screen), the stream pauses and the display
+  keeps the last Waze frame. It resumes within a second of returning. This is the recommended car
+  setup: Landscape preset, share Waze only, auto-rotate on, music over Bluetooth.
+- The app's page now scrolls, so Stop and Pause stay reachable when the phone is sideways.
+- The phone's screen must stay on and unlocked while mirroring. Waze keeps it awake while
+  navigating.
 - Next: try Smoother in the car. If it still freezes often, try Lightest; the car's Wi-Fi may
   carry less than 2.5 Mbps.
 
