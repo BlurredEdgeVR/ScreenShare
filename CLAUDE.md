@@ -79,6 +79,20 @@ Things to know about it:
 - `UpdateChecker` downloads and installs APKs from the upstream `weiw0923/ScreenShare` GitHub releases.
 - It isn't involved in the car work, because the car is its own renderer.
 
+## Testing without the car
+
+`tools/stand-in-display/` contains a stand-in for the car's DLNA screen that runs on the Mac. It needs ffmpeg (`ffplay` and `ffprobe`).
+
+1. Set up the tunnels: `adb reverse tcp:49152 tcp:49152` and `adb forward tcp:18080 tcp:8080`.
+2. Back up the app's `shared_prefs/MainActivity.xml` (read it with `adb shell run-as com.screenshare.send`). It holds the car's IP in `last_tv_ip`.
+3. Force-stop the app and write `last_tv_ip` = `127.0.0.1`. The phone must still be on some Wi-Fi, because the app needs a `wlan` IP to build the stream URL. Control traffic goes over USB, and the stream goes over Wi-Fi, or over USB if Wi-Fi can't reach the Mac.
+4. Run `python3 fake_display.py > display.log`. It records each stream to `recordings/N.ts` and shows it live in an ffplay window. `GET /record?rate=1200` records the current stream again, reading at 1.2 Mbps like a slow car.
+5. Tap "Screen mirror" (for example with `phone.py tap "Screen mirror"`). The user has to choose "Share entire screen" and tap Next on the phone.
+6. Run `run_test.sh display.log`. It scrolls the phone's Settings app, records once at full speed and once as a slow car, then stops mirroring.
+7. Run `analyze.py recordings/*.ts` to get resolution, fps, bitrate, keyframe spacing, frame gaps and decoder warnings. Warnings on the last frame come from cutting the recording off and can be ignored.
+
+Afterwards, restore the prefs backup and remove the tunnels.
+
 ## Network ports
 
 | Port | Owner | Purpose |

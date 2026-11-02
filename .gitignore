@@ -5,3 +5,4 @@ local.properties
 .idea/
 *.apk.idsig
 tv/.kotlin/
+tools/stand-in-display/recordings/

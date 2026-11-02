@@ -28,7 +28,23 @@ Smoother and Lightest also do two other things:
 - They give the car its own send queue. If the car falls about 1 s behind, the queue is dropped
   and the stream resumes at the next keyframe, so a slow car never stalls the encoder.
 
-If the car stutters less on Smoother, the next step is to find out which change helped.
+### Test results (2 Nov, phone streaming over Wi-Fi to a stand-in display on a Mac)
+
+See `tools/stand-in-display/` and the "Testing without the car" section of CLAUDE.md. Each preset
+was recorded twice while the phone scrolled: once read at full speed, and once read at 1.2 Mbps
+to act like a slow car.
+
+| Preset | Full speed | Slow display (1.2 Mbps) |
+|---|---|---|
+| As now | 652×1280, **59 fps** (screen runs at 60–120 Hz, no cap), 4.2 Mbps, keyframe every 0.5 s | 4 s of video in 20 s: **16 s behind** and growing |
+| Smoother | 488×960, 24 fps, 2.5 Mbps, keyframe every 1 s | stays live (≤1.5 s behind), 9 freezes of ~1.3 s in 20 s |
+| Lightest | 366×720, 20 fps, 1.5 Mbps, keyframe every 1 s | stays live, 4 freezes in 20 s |
+
+- Android lets a socket hold about 4 MB unsent, so skip-ahead only worked after the send buffer
+  was limited to 64 KB (commit 53ccac5).
+- With the frame cap, a static screen sends a frame only about every 1.2 s. Harmless so far.
+- Next: try Smoother in the car. If it still freezes often, try Lightest; the car's Wi-Fi may
+  carry less than 2.5 Mbps.
 
 ## Fixes already made on top of upstream (weiw0923/ScreenShare)
 
