@@ -409,7 +409,7 @@ class MainActivity : Activity() {
             val token = MirrorServer.streamToken
             if (token.isEmpty()) { toast("Mirror service not ready"); return@postDelayed }
             statusView.text = "Mirroring: $ip:8080/live.ts"
-            DlnaController.setUriAndPlay(e, "http://$ip:8080/live.ts?k=$token", "Screen mirror") { ok ->
+            DlnaController.playLiveStream(e, "http://$ip:8080/live.ts?k=$token", "Screen mirror") { ok ->
                 runOnUiThread {
                     if (ok) {
                         statusView.text = "Mirroring phone screen to display"

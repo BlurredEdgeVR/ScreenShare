@@ -125,9 +125,13 @@ object MirrorServer {
                 ("HTTP/1.1 200 OK\r\n" +
                     "Content-Type: video/mp2t\r\n" +
                     "Cache-Control: no-store\r\n" +
+                    "transferMode.dlna.org: Streaming\r\n" +
+                    "contentFeatures.dlna.org: DLNA.ORG_PN=MPEG_TS_HD_NA_ISO;DLNA.ORG_OP=00;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000\r\n" +
+                    "Accept-Ranges: none\r\n" +
                     "Connection: close\r\n\r\n").toByteArray()
             )
             out.flush()
+            if (req.startsWith("HEAD ")) { sock.close(); return }
             val added = Sink(out)
             sink = added
             synchronized(writeLock) { clients.add(added) }

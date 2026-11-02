@@ -45,7 +45,7 @@ object DlnaController {
         }
     }
 
-    fun setUriAndPlay(endpoints: RendererEndpoints, mediaUrl: String, title: String, cb: (Boolean) -> Unit) {
+    fun setUriAndPlay(endpoints: RendererEndpoints, mediaUrl: String, title: String, protocolInfo: String = "http-get:*:video/mp4:*", cb: (Boolean) -> Unit) {
         executor.execute {
             val uriEsc = xmlEscape(mediaUrl)
             val meta = xmlEscape(title)
@@ -55,7 +55,7 @@ object DlnaController {
                     "xmlns:upnp=\"urn:schemas-upnp-org:metadata-1-0/upnp/\">" +
                     "<item id=\"1\" restricted=\"0\"><dc:title>" + meta + "</dc:title>" +
                     "<upnp:class>object.item.videoItem</upnp:class>" +
-                    "<res protocolInfo=\"http-get:*:video/mp4:*\">" + uriEsc + "</res>" +
+                    "<res protocolInfo=\"" + protocolInfo + "\">" + uriEsc + "</res>" +
                     "</item></DIDL-Lite>"
             )
             val setBody = soapEnvelope(
@@ -68,6 +68,21 @@ object DlnaController {
             val playBody = soapEnvelope("Play", "<InstanceID>0</InstanceID><Speed>1</Speed>")
             cb(soap(endpoints.avTransportControlUrl, "Play", playBody))
         }
+    }
+
+    /** Live screen stream: try the precise MPEG-TS type first, then looser ones some renderers expect. */
+    fun playLiveStream(endpoints: RendererEndpoints, mediaUrl: String, title: String, cb: (Boolean) -> Unit) {
+        val infos = listOf(
+            "http-get:*:video/mp2t:DLNA.ORG_PN=MPEG_TS_HD_NA_ISO;DLNA.ORG_OP=00;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000",
+            "http-get:*:video/mp2t:*",
+            "http-get:*:video/mpeg:*",
+            "http-get:*:*:*"
+        )
+        fun attempt(i: Int) {
+            if (i >= infos.size) { cb(false); return }
+            setUriAndPlay(endpoints, mediaUrl, title, infos[i]) { ok -> if (ok) cb(true) else attempt(i + 1) }
+        }
+        attempt(0)
     }
 
     fun seekTo(endpoints: RendererEndpoints, seconds: Int, cb: (Boolean) -> Unit) {

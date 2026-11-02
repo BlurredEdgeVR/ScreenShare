@@ -37,6 +37,7 @@ class MirrorService : Service() {
         var requestStart: ((Activity) -> Unit)? = null
     }
 
+    private var wifiLock: android.net.wifi.WifiManager.WifiLock? = null
     private var projection: MediaProjection? = null
     private var virtualDisplay: VirtualDisplay? = null
     private var codec: MediaCodec? = null
@@ -137,9 +138,11 @@ class MirrorService : Service() {
 
         val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, w, h).apply {
             setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
-            setInteger(MediaFormat.KEY_BIT_RATE, 6_000_000)
+            setInteger(MediaFormat.KEY_BIT_RATE, 4_000_000)
             setInteger(MediaFormat.KEY_FRAME_RATE, 30)
-            setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 2)
+            setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
+            setInteger(MediaFormat.KEY_PRIORITY, 0)
+            if (Build.VERSION.SDK_INT >= 30) setInteger(MediaFormat.KEY_LATENCY, 1)
             // A static screen otherwise produces no frames, so a joiner waits forever for an IDR.
             setInteger(MediaFormat.KEY_REPEAT_PREVIOUS_FRAME_AFTER, 100_000)
         }
@@ -159,6 +162,11 @@ class MirrorService : Service() {
         MirrorServer.psiSource = { muxer.buildPatPmt() }
         MirrorServer.start()
         muxer.setHasAudio(false)
+        try {
+            val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as android.net.wifi.WifiManager
+            @Suppress("DEPRECATION")
+            wifiLock = wm.createWifiLock(if (Build.VERSION.SDK_INT >= 29) android.net.wifi.WifiManager.WIFI_MODE_FULL_LOW_LATENCY else android.net.wifi.WifiManager.WIFI_MODE_FULL_HIGH_PERF, "ssmirror").apply { acquire() }
+        } catch (_: Throwable) {}
         isRunning = true
         drainCodec()
         startPsiRefresh()
@@ -392,6 +400,8 @@ class MirrorService : Service() {
         try { audioThread?.join(500) } catch (_: Exception) {}
         audioRecord = null; audioCodec = null; audioThread = null
         try { android.media.AudioManager::class.java } catch (_: Exception) {}
+        try { wifiLock?.release() } catch (_: Throwable) {}
+        wifiLock = null
         try { virtualDisplay?.release() } catch (_: Exception) {}
         try { codec?.stop(); codec?.release() } catch (_: Exception) {}
         try { projection?.stop() } catch (_: Exception) {}
