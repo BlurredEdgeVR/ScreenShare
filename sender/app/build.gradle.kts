@@ -24,6 +24,14 @@ android {
         versionCode = ver.getProperty("versionCode")?.toInt() ?: 1
         versionName = ver.getProperty("versionName") ?: "1.0"
     }
+    signingConfigs {
+        getByName("debug") {
+            storeFile = file("screenshare-debug.jks")
+            storePassword = "android"
+            keyAlias = "debug"
+            keyPassword = "android"
+        }
+    }
     buildTypes {
         release {
             isMinifyEnabled = false

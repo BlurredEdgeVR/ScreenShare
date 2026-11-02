@@ -66,7 +66,12 @@ class MirrorService : Service() {
         val data = intent?.getParcelableExtra<Intent>(EXTRA_DATA)
         if (code < 0 || data == null) { stopSelf(); return START_NOT_STICKY }
 
-        startForegroundInternal()
+        try {
+            startForegroundInternal()
+        } catch (e: Throwable) {
+            CrashLog.save(this, e)
+            stopSelf(); return START_NOT_STICKY
+        }
         startMirror(code, data)
         return START_STICKY
     }
@@ -103,8 +108,9 @@ class MirrorService : Service() {
     private fun startMirror(resultCode: Int, data: Intent) {
         try {
             startMirrorInner(resultCode, data)
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             android.util.Log.e("MirrorService", "startMirror failed", e)
+            CrashLog.save(this, e)
             stopSelfSafely()
         }
     }
@@ -152,8 +158,7 @@ class MirrorService : Service() {
         MirrorServer.onClientConnected = { requestSyncFrame() }
         MirrorServer.psiSource = { muxer.buildPatPmt() }
         MirrorServer.start()
-        startAudio()
-        if (!audioRunning) muxer.setHasAudio(false)
+        muxer.setHasAudio(false)
         isRunning = true
         drainCodec()
         startPsiRefresh()
@@ -305,7 +310,7 @@ class MirrorService : Service() {
                         }
                     }
                     c.releaseOutputBuffer(idx, false)
-                } catch (_: Exception) { break }
+                } catch (_: Throwable) { break }
             }
         }
     }

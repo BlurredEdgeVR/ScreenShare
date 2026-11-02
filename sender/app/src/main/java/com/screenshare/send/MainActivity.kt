@@ -32,6 +32,7 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        CrashLog.install(this)
         // crash surface: any uncaught exception is shown on screen so field crashes are diagnosable
         val prevHandler = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { t, e ->
@@ -376,11 +377,6 @@ class MainActivity : Activity() {
 
     private fun startMirrorFlow() {
         val e = endpoints ?: return
-        if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
-            pendingMirror = true
-            requestPermissions(arrayOf(android.Manifest.permission.RECORD_AUDIO), 77)
-            return
-        }
         val pmgr = getSystemService(MediaProjectionManager::class.java)
         pendingMirror = true
         @Suppress("DEPRECATION")
@@ -400,10 +396,12 @@ class MainActivity : Activity() {
             putExtra(MirrorService.EXTRA_RESULT_CODE, resultCode)
             putExtra(MirrorService.EXTRA_DATA, data)
         }
-        if (android.os.Build.VERSION.SDK_INT >= 26) {
-            startForegroundService(svc)
-        } else {
-            startService(svc)
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= 26) startForegroundService(svc) else startService(svc)
+        } catch (t: Throwable) {
+            CrashLog.save(this, t)
+            showCrashIfAny()
+            return
         }
         // 2) wait a moment for server, then push URL to TV
         android.os.Handler(mainLooper).postDelayed({
@@ -440,7 +438,7 @@ class MainActivity : Activity() {
             castUri(uri)
         }
         if (requestCode == projectionLauncher && resultCode == RESULT_OK) {
-            data?.let { launchMirror(resultCode, it) }
+            data?.let { try { launchMirror(resultCode, it) } catch (t: Throwable) { CrashLog.save(this, t); showCrashIfAny() } }
         }
     }
 
@@ -499,5 +497,19 @@ class MainActivity : Activity() {
             } catch (_: Exception) {
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        showCrashIfAny()
+    }
+
+    private fun showCrashIfAny() {
+        val log = CrashLog.take(this) ?: return
+        android.app.AlertDialog.Builder(this)
+            .setTitle("ScreenShare error report")
+            .setMessage(log.take(3000))
+            .setPositiveButton("OK", null)
+            .show()
     }
 }
