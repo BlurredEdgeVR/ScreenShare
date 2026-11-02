@@ -54,8 +54,9 @@ to act like a slow car.
   keeps the last Waze frame. It resumes within a second of returning. This is the recommended car
   setup: Landscape preset, share Waze only, auto-rotate on, music over Bluetooth.
 - The app's page now scrolls, so Stop and Pause stay reachable when the phone is sideways.
-- The phone's screen must stay on and unlocked while mirroring. Waze keeps it awake while
-  navigating.
+- The phone's screen must stay on and unlocked while mirroring. The app now holds a dim-screen
+  wake lock for the whole mirroring session, so the screen can't time out; the power button
+  still locks it.
 - Next: try Smoother in the car. If it still freezes often, try Lightest; the car's Wi-Fi may
   carry less than 2.5 Mbps.
 

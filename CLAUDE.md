@@ -58,6 +58,7 @@ Then `DlnaController.playLiveStream` tells the renderer to fetch that URL.
 - How `broadcast()` sends depends on the preset:
   - With `AS_NOW`, it writes to every client synchronously, under one lock, on the encoder drain thread, so a slow socket stalls encoding.
   - With presets that set `skipWhenBehind`, each client gets its own queue and writer thread. If a client falls more than about 1 s (`maxQueuedBytes`) behind, its backlog is dropped and it resumes at the next keyframe.
+- While mirroring, `MirrorService` holds a low-latency Wi-Fi lock and a `SCREEN_DIM_WAKE_LOCK`. A dark or locked phone screen freezes the car's picture, and an activity's `FLAG_KEEP_SCREEN_ON` doesn't help once Waze is in front. Both locks are released in `stopSelfSafely()`.
 - If the drain loop fails mid-stream, the stream ends. The error is saved with `CrashLog` and shown the next time the app opens.
 - `TsMuxer` is a hand-written MPEG-TS muxer: PAT on PID 0, PMT on 0x1000, H.264 on 0x100 (also the PCR PID), and AAC on 0x101 only if `setHasAudio(true)`. `buildPatPmt()` must build new packets on every call so continuity counters advance. Don't cache it.
 - Audio is turned off. `MirrorService.startAudio()` still exists but is never called, and `setHasAudio(false)` is set. It captured the cabin mic rather than phone audio and could crash the app.

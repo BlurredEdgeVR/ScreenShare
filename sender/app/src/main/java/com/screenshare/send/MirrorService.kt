@@ -39,6 +39,7 @@ class MirrorService : Service() {
     }
 
     private var wifiLock: android.net.wifi.WifiManager.WifiLock? = null
+    private var screenLock: android.os.PowerManager.WakeLock? = null
     private var projection: MediaProjection? = null
     private var virtualDisplay: VirtualDisplay? = null
     private var codec: MediaCodec? = null
@@ -187,6 +188,17 @@ class MirrorService : Service() {
             val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as android.net.wifi.WifiManager
             @Suppress("DEPRECATION")
             wifiLock = wm.createWifiLock(if (Build.VERSION.SDK_INT >= 29) android.net.wifi.WifiManager.WIFI_MODE_FULL_LOW_LATENCY else android.net.wifi.WifiManager.WIFI_MODE_FULL_HIGH_PERF, "ssmirror").apply { acquire() }
+        } catch (_: Throwable) {}
+        try {
+            // Keep the screen on while mirroring: a dark or locked phone freezes the car's picture.
+            // Dimmed is fine, the capture doesn't depend on brightness. The timeout only guards
+            // against a leak; stopping mirroring releases it.
+            val pm = getSystemService(android.os.PowerManager::class.java)
+            @Suppress("DEPRECATION")
+            screenLock = pm.newWakeLock(android.os.PowerManager.SCREEN_DIM_WAKE_LOCK, "ScreenShare:mirror").apply {
+                setReferenceCounted(false)
+                acquire(12 * 60 * 60 * 1000L)
+            }
         } catch (_: Throwable) {}
         isRunning = true
         drainCodec()
@@ -431,6 +443,8 @@ class MirrorService : Service() {
         try { android.media.AudioManager::class.java } catch (_: Exception) {}
         try { wifiLock?.release() } catch (_: Throwable) {}
         wifiLock = null
+        try { screenLock?.release() } catch (_: Throwable) {}
+        screenLock = null
         try { virtualDisplay?.release() } catch (_: Exception) {}
         try { codec?.stop(); codec?.release() } catch (_: Exception) {}
         try { projection?.stop() } catch (_: Exception) {}
