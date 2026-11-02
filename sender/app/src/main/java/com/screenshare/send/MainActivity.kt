@@ -136,10 +136,11 @@ class MainActivity : Activity() {
                         if (u.startsWith("http")) {
                             val e = endpoints ?: return@setPositiveButton
                             statusView.text = "Casting…"
+                            DlnaController.takeErrorLog()
                             DlnaController.setUriAndPlay(e, u, "Online video") { ok ->
                                 runOnUiThread {
                                     if (ok) { statusView.text = "Playing link on display"; controlsRow.visibility = View.VISIBLE }
-                                    else toast("Cast failed: link not playable or refused")
+                                    else showReport("Cast failed: link not playable or refused", DlnaController.takeErrorLog().ifBlank { DlnaController.lastError })
                                 }
                             }
                         } else toast("Enter a link starting with http")
@@ -409,13 +410,14 @@ class MainActivity : Activity() {
             val token = MirrorServer.streamToken
             if (token.isEmpty()) { toast("Mirror service not ready"); return@postDelayed }
             statusView.text = "Mirroring: $ip:8080/live.ts"
+            DlnaController.takeErrorLog()
             DlnaController.playLiveStream(e, "http://$ip:8080/live.ts?k=$token", "Screen mirror") { ok ->
                 runOnUiThread {
                     if (ok) {
                         statusView.text = "Mirroring phone screen to display"
                         controlsRow.visibility = View.VISIBLE
                     } else {
-                        toast("Display refused the mirror stream")
+                        showReport("Display refused the mirror stream", DlnaController.takeErrorLog().ifBlank { DlnaController.lastError })
                     }
                 }
             }
@@ -463,6 +465,7 @@ class MainActivity : Activity() {
         LocalRelay.start(this, uri) { localUrl ->
             val url = if (LocalRelay.contentTypeFor(uri) != "video/mp4") "$localUrl?ct=${LocalRelay.contentTypeFor(uri)}" else localUrl
             val name = queryName(uri) ?: "media"
+            DlnaController.takeErrorLog()
             DlnaController.setUriAndPlay(e, url, name) { ok ->
                 runOnUiThread {
                     if (ok) {
@@ -470,6 +473,7 @@ class MainActivity : Activity() {
                         controlsRow.visibility = View.VISIBLE
                     } else {
                         statusView.text = "Cast failed: display refused the request"
+                        showReport("Cast failed: display refused the request", DlnaController.takeErrorLog().ifBlank { DlnaController.lastError })
                     }
                 }
             }
@@ -506,8 +510,13 @@ class MainActivity : Activity() {
 
     private fun showCrashIfAny() {
         val log = CrashLog.take(this) ?: return
+        showReport("ScreenShare error report", log)
+    }
+
+    private fun showReport(title: String, body: String) {
+        val log = "$title\nAndroid ${android.os.Build.VERSION.RELEASE}, ${android.os.Build.MODEL}\n\n$body"
         android.app.AlertDialog.Builder(this)
-            .setTitle("ScreenShare error report")
+            .setTitle(title)
             .setMessage(log.take(3000))
             .setPositiveButton("OK", null)
             .setNeutralButton("Copy") { _, _ ->

@@ -46,7 +46,15 @@ object DlnaController {
     }
 
     fun setUriAndPlay(endpoints: RendererEndpoints, mediaUrl: String, title: String, protocolInfo: String = "http-get:*:video/mp4:*", cb: (Boolean) -> Unit) {
+        setUriAndPlay(endpoints, mediaUrl, title, protocolInfo, true) { ok ->
+            if (ok) cb(true) else setUriAndPlay(endpoints, mediaUrl, title, protocolInfo, false, cb)
+        }
+    }
+
+    private fun setUriAndPlay(endpoints: RendererEndpoints, mediaUrl: String, title: String, protocolInfo: String, withMeta: Boolean, cb: (Boolean) -> Unit) {
         executor.execute {
+            // A renderer still holding the last cast often refuses a new URI until stopped.
+            soap(endpoints.avTransportControlUrl, "Stop", soapEnvelope("Stop", "<InstanceID>0</InstanceID>"))
             val uriEsc = xmlEscape(mediaUrl)
             val meta = xmlEscape(title)
             val didl = xmlEscape(
@@ -61,7 +69,7 @@ object DlnaController {
             val setBody = soapEnvelope(
                 "SetAVTransportURI",
                 "<InstanceID>0</InstanceID><CurrentURI>" + uriEsc + "</CurrentURI>" +
-                    "<CurrentURIMetaData>" + didl + "</CurrentURIMetaData>"
+                    "<CurrentURIMetaData>" + (if (withMeta) didl else "") + "</CurrentURIMetaData>"
             )
             val setOk = soap(endpoints.avTransportControlUrl, "SetAVTransportURI", setBody)
             if (!setOk) { cb(false); return@execute }
@@ -130,8 +138,18 @@ object DlnaController {
             "<u:$action xmlns:u=\"urn:schemas-upnp-org:service:AVTransport:1\">$args</u:$action>" +
             "</s:Body></s:Envelope>"
 
+    /** The car's last refusal, shown to the user so we can see why. */
+    @Volatile var lastError: String = ""
+    private val errorLog = StringBuilder()
+
+    fun takeErrorLog(): String = synchronized(errorLog) { errorLog.toString().also { errorLog.setLength(0) } }
+
     private fun soap(url: String, action: String, body: String): Boolean {
-        return try { soapRaw(url, action, body); true } catch (_: Exception) { false }
+        return try { soapRaw(url, action, body); true } catch (e: Exception) {
+            lastError = "$action failed: ${e.javaClass.simpleName}: ${e.message}"
+            synchronized(errorLog) { errorLog.append(lastError).append("\n\n") }
+            false
+        }
     }
 
     private fun soapRaw(url: String, action: String, body: String): String {
@@ -151,7 +169,7 @@ object DlnaController {
         val stream = if (code in 200..299) conn.inputStream else conn.errorStream
         val text = stream?.bufferedReader(Charsets.UTF_8)?.use(BufferedReader::readText) ?: ""
         conn.disconnect()
-        if (code !in 200..299) throw IllegalStateException("SOAP $action -> $code: ${text.take(200)}")
+        if (code !in 200..299) throw IllegalStateException("HTTP $code: ${text.take(800)}")
         return text
     }
 
