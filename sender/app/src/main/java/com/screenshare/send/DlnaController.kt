@@ -37,8 +37,19 @@ object DlnaController {
                     Regex("<controlURL>([^<]+)</controlURL>").find(it)?.groupValues?.get(1)?.trim()
                 }
                 if (control == null) { cb(null); return@execute }
-                val abs = if (control.startsWith("http")) control else "$base/${control.removePrefix("/")}"
-                cb(RendererEndpoints(name, abs))
+                // Resolve like a browser would: "/x" is from the host root, "x" is relative.
+                val baseForResolve = (Regex("<URLBase>([^<]+)</URLBase>").find(xml)?.groupValues?.get(1)?.trim())
+                    ?: descriptionUrl
+                val origin = URL(descriptionUrl).let { "${it.protocol}://${it.host}:${if (it.port > 0) it.port else it.defaultPort}" }
+                val candidates = linkedSetOf<String>()
+                try { candidates.add(URL(URL(baseForResolve), control).toString()) } catch (_: Exception) {}
+                if (control.startsWith("http")) candidates.add(control)
+                candidates.add("$origin/${control.removePrefix("/")}")
+                candidates.add("$base/${control.removePrefix("/")}")
+                val list = candidates.toList()
+                alternates[list.first()] = list
+                info = "Description: $descriptionUrl\ncontrolURL: $control\nTrying: ${list.joinToString(" | ")}"
+                cb(RendererEndpoints(name, list.first()))
             } catch (_: Exception) {
                 cb(null)
             }
@@ -140,16 +151,32 @@ object DlnaController {
 
     /** The car's last refusal, shown to the user so we can see why. */
     @Volatile var lastError: String = ""
+    @Volatile var info: String = ""
+    /** Other plausible forms of a control URL, tried when the car answers 404. */
+    private val alternates = java.util.concurrent.ConcurrentHashMap<String, List<String>>()
+    private val working = java.util.concurrent.ConcurrentHashMap<String, String>()
     private val errorLog = StringBuilder()
 
     fun takeErrorLog(): String = synchronized(errorLog) { errorLog.toString().also { errorLog.setLength(0) } }
 
     private fun soap(url: String, action: String, body: String): Boolean {
-        return try { soapRaw(url, action, body); true } catch (e: Exception) {
-            lastError = "$action failed: ${e.javaClass.simpleName}: ${e.message}"
-            synchronized(errorLog) { errorLog.append(lastError).append("\n\n") }
-            false
+        val known = working[url]
+        val tries = if (known != null) listOf(known) else (alternates[url] ?: listOf(url))
+        var last: Exception? = null
+        for (u in tries) {
+            try {
+                soapRaw(u, action, body)
+                working[url] = u
+                return true
+            } catch (e: Exception) {
+                last = e
+                val notFound = e.message?.startsWith("HTTP 404") == true
+                if (!notFound) break   // the car answered; another address won't help
+            }
         }
+        lastError = "$action failed: ${last?.javaClass?.simpleName}: ${last?.message}"
+        synchronized(errorLog) { errorLog.append(lastError).append("\n\n") }
+        return false
     }
 
     private fun soapRaw(url: String, action: String, body: String): String {

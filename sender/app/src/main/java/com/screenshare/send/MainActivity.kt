@@ -140,7 +140,7 @@ class MainActivity : Activity() {
                             DlnaController.setUriAndPlay(e, u, "Online video") { ok ->
                                 runOnUiThread {
                                     if (ok) { statusView.text = "Playing link on display"; controlsRow.visibility = View.VISIBLE }
-                                    else showReport("Cast failed: link not playable or refused", DlnaController.takeErrorLog().ifBlank { DlnaController.lastError })
+                                    else showReport("Cast failed: link not playable or refused", DlnaController.takeErrorLog().ifBlank { DlnaController.lastError } + "\n\n" + DlnaController.info)
                                 }
                             }
                         } else toast("Enter a link starting with http")
@@ -417,7 +417,7 @@ class MainActivity : Activity() {
                         statusView.text = "Mirroring phone screen to display"
                         controlsRow.visibility = View.VISIBLE
                     } else {
-                        showReport("Display refused the mirror stream", DlnaController.takeErrorLog().ifBlank { DlnaController.lastError })
+                        showReport("Display refused the mirror stream", DlnaController.takeErrorLog().ifBlank { DlnaController.lastError } + "\n\n" + DlnaController.info)
                     }
                 }
             }
@@ -473,7 +473,7 @@ class MainActivity : Activity() {
                         controlsRow.visibility = View.VISIBLE
                     } else {
                         statusView.text = "Cast failed: display refused the request"
-                        showReport("Cast failed: display refused the request", DlnaController.takeErrorLog().ifBlank { DlnaController.lastError })
+                        showReport("Cast failed: display refused the request", DlnaController.takeErrorLog().ifBlank { DlnaController.lastError } + "\n\n" + DlnaController.info)
                     }
                 }
             }
