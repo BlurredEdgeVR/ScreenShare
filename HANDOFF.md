@@ -43,6 +43,9 @@ to act like a slow car.
 - Android lets a socket hold about 4 MB unsent, so skip-ahead only worked after the send buffer
   was limited to 64 KB (commit 53ccac5).
 - With the frame cap, a static screen sends a frame only about every 1.2 s. Harmless so far.
+- Added **Landscape** (1280 px wide, 24 fps, 3 Mbps) and **Landscape light** (960 px wide, 20 fps,
+  1.8 Mbps). They always send a sideways picture, so Waze turned sideways fills the car screen.
+  Tidal and other upright apps show in the middle with bars on both sides.
 - Next: try Smoother in the car. If it still freezes often, try Lightest; the car's Wi-Fi may
   carry less than 2.5 Mbps.
 

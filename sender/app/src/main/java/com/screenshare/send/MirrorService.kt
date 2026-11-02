@@ -134,6 +134,16 @@ class MirrorService : Service() {
             h = (h * scale / 2).toInt() * 2
         }
         w = w and (Int.MAX_VALUE - 1); h = h and (Int.MAX_VALUE - 1)
+        if (quality.landscape) {
+            // A fixed sideways frame shaped like the physical screen, so it doesn't depend on how the
+            // phone was held when mirroring started. The system fits the phone's picture inside it.
+            val mode = getSystemService(DisplayManager::class.java)
+                ?.getDisplay(android.view.Display.DEFAULT_DISPLAY)?.mode
+            val a = mode?.physicalWidth ?: metrics.widthPixels
+            val b = mode?.physicalHeight ?: metrics.heightPixels
+            w = quality.longSide
+            h = (quality.longSide.toLong() * minOf(a, b) / maxOf(a, b)).toInt() / 2 * 2
+        }
         width = w; height = h
 
         val pmgr = getSystemService(MediaProjectionManager::class.java)

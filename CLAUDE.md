@@ -53,6 +53,7 @@ Then `DlnaController.playLiveStream` tells the renderer to fetch that URL.
   - `AS_NOW` (1280 px, 30 fps, 4 Mbps) is the setup that first worked in the car, and it is the default. Keep it unchanged and add new presets instead.
   - All presets use a 1 s I-frame interval and `KEY_REPEAT_PREVIOUS_FRAME_AFTER`. Without that setting, a static screen produces no frames and a new client waits forever for a keyframe.
   - The phone's screen runs at up to 120 Hz, so the newer presets also set `KEY_MAX_FPS_TO_ENCODER`.
+  - The `landscape` presets use a fixed sideways frame shaped like the physical screen (taken from `Display.Mode`), whichever way the phone is held at start. `AUTO_MIRROR` fits the phone's picture inside it and follows rotation, so Waze turned sideways fills the frame and an upright app shows in the middle with bars. The other presets size the frame from `resources.displayMetrics` at start, so their shape is locked to the orientation at that moment.
 - `MirrorServer` is a hand-rolled HTTP server on port 8080. It needs a random per-session token (`k=`), sends DLNA streaming headers, and supports `HEAD`. A new client gets nothing until the next keyframe, which is prefixed with a fresh PAT/PMT. Joining also triggers `requestSyncFrame()`. A separate `MirrorPsi` thread re-sends PAT/PMT every 400 ms.
 - How `broadcast()` sends depends on the preset:
   - With `AS_NOW`, it writes to every client synchronously, under one lock, on the encoder drain thread, so a slow socket stalls encoding.
