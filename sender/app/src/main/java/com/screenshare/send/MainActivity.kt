@@ -24,6 +24,7 @@ class MainActivity : Activity() {
     private lateinit var controlsRow: LinearLayout
     private lateinit var spinner: ProgressBar
     private lateinit var mirrorButton: Button
+    private lateinit var qualityButton: Button
     private lateinit var urlButton: Button
     private lateinit var rootLayout: LinearLayout
 
@@ -120,6 +121,11 @@ class MainActivity : Activity() {
             visibility = View.GONE
             setOnClickListener { startMirrorFlow() }
         }
+        qualityButton = Button(this).apply {
+            visibility = View.GONE
+            setOnClickListener { chooseQuality() }
+        }
+        updateQualityButton()
         urlButton = Button(this).apply {
             text = "Cast an online video link"
             visibility = View.GONE
@@ -207,6 +213,7 @@ class MainActivity : Activity() {
         root.addView(contentSection)
         root.addView(pickButton)
         root.addView(mirrorButton)
+        root.addView(qualityButton)
         root.addView(urlButton)
         val ctlSection = TextView(this).apply {
             text = "── Controls ──"
@@ -366,6 +373,7 @@ class MainActivity : Activity() {
                     statusView.text = "Choose a video on your phone to cast"
                     pickButton.visibility = View.VISIBLE
                     mirrorButton.visibility = View.VISIBLE
+                    qualityButton.visibility = View.VISIBLE
                     urlButton.visibility = View.VISIBLE
                     refreshButton?.let { removeView(it) }
                 }
@@ -396,6 +404,7 @@ class MainActivity : Activity() {
         val svc = Intent(this, MirrorService::class.java).apply {
             putExtra(MirrorService.EXTRA_RESULT_CODE, resultCode)
             putExtra(MirrorService.EXTRA_DATA, data)
+            putExtra(MirrorService.EXTRA_QUALITY, mirrorQuality().name)
         }
         try {
             if (android.os.Build.VERSION.SDK_INT >= 26) startForegroundService(svc) else startService(svc)
@@ -422,6 +431,28 @@ class MainActivity : Activity() {
                 }
             }
         }, 1200)
+    }
+
+    private fun mirrorQuality(): MirrorQuality =
+        MirrorQuality.fromName(getPreferences(MODE_PRIVATE).getString("mirror_quality", null))
+
+    private fun updateQualityButton() {
+        qualityButton.text = "Mirror quality: ${mirrorQuality().title}"
+    }
+
+    private fun chooseQuality() {
+        val all = MirrorQuality.entries
+        val items = all.map { "${it.title}\n${it.detail}" }.toTypedArray()
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Mirror quality")
+            .setSingleChoiceItems(items, all.indexOf(mirrorQuality())) { dialog, which ->
+                getPreferences(MODE_PRIVATE).edit().putString("mirror_quality", all[which].name).apply()
+                updateQualityButton()
+                dialog.dismiss()
+                if (MirrorService.isRunning) toast("Applies next time you start mirroring")
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 
     private fun pickVideo() {

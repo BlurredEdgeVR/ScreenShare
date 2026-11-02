@@ -9,6 +9,9 @@ import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.Executors
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Serves the live MPEG-TS mirror stream at http://<phone>:8080/live.ts,
@@ -16,9 +19,34 @@ import java.util.concurrent.Executors
  * Multiple clients allowed; each gets the stream from the next keyframe.
  */
 object MirrorServer {
-    private class Sink(val out: OutputStream) {
-        var primed = false
+    /**
+     * One connected display. A [queued] sink is fed by its own writer thread, so a slow
+     * display only backs up its own queue. Otherwise [broadcast] writes to it directly.
+     */
+    private class Sink(val out: OutputStream, val queued: Boolean) {
+        @Volatile var primed = false
+        val queue = LinkedBlockingQueue<ByteArray>()
+        val queuedBytes = AtomicLong()
+
+        fun enqueue(chunk: ByteArray) {
+            queuedBytes.addAndGet(chunk.size.toLong())
+            queue.offer(chunk)
+        }
+
+        /** Drops the backlog. Chunks are whole TS packets, so the stream stays aligned. */
+        fun clear() {
+            val dropped = ArrayList<ByteArray>()
+            queue.drainTo(dropped)
+            queuedBytes.addAndGet(-dropped.sumOf { it.size.toLong() })
+        }
     }
+
+    /**
+     * Set before [start]. When true, a display that falls more than [maxQueuedBytes] behind
+     * has its backlog dropped and restarts at the next keyframe, instead of stalling the encoder.
+     */
+    @Volatile var skipWhenBehind = false
+    @Volatile var maxQueuedBytes = 512 * 1024
 
     private val executor = Executors.newCachedThreadPool()
     private var server: ServerSocket? = null
@@ -132,12 +160,22 @@ object MirrorServer {
             )
             out.flush()
             if (req.startsWith("HEAD ")) { sock.close(); return }
-            val added = Sink(out)
+            val added = Sink(out, skipWhenBehind)
             sink = added
             synchronized(writeLock) { clients.add(added) }
             try { onClientConnected?.invoke() } catch (_: Exception) {}
-            // block until client goes away
-            try { input.read(ByteArray(1)) } catch (_: Exception) {}
+            if (added.queued) {
+                // This thread is the display's writer. A failed write means it went away.
+                while (running) {
+                    val chunk = added.queue.poll(500, TimeUnit.MILLISECONDS) ?: continue
+                    added.queuedBytes.addAndGet(-chunk.size.toLong())
+                    out.write(chunk)
+                    out.flush()
+                }
+            } else {
+                // block until client goes away
+                try { input.read(ByteArray(1)) } catch (_: Exception) {}
+            }
         } catch (_: Exception) {
         } finally {
             sink?.let { s -> synchronized(writeLock) { clients.remove(s) } }
@@ -155,6 +193,24 @@ object MirrorServer {
         synchronized(writeLock) {
             val dead = ArrayList<Sink>()
             for (c in clients) {
+                if (c.queued) {
+                    if (keyframe) {
+                        // Too far behind: drop the backlog and jump straight to this keyframe.
+                        if (c.queuedBytes.get() > maxQueuedBytes) c.clear()
+                        psi?.let { c.enqueue(it) }
+                        c.primed = true
+                        c.enqueue(ts)
+                    } else if (c.primed) {
+                        if (c.queuedBytes.get() > maxQueuedBytes) {
+                            // Stop feeding it until the next keyframe (at most 1 s away).
+                            c.clear()
+                            c.primed = false
+                        } else {
+                            c.enqueue(ts)
+                        }
+                    }
+                    continue
+                }
                 try {
                     if (keyframe) {
                         psi?.let { c.out.write(it) }
@@ -178,6 +234,7 @@ object MirrorServer {
             val dead = ArrayList<Sink>()
             for (c in clients) {
                 if (!c.primed) continue
+                if (c.queued) { c.enqueue(packets); continue }
                 try {
                     c.out.write(packets)
                     c.out.flush()

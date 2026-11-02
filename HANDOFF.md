@@ -9,8 +9,26 @@ so Waze can be used on the car screen. The car has no Android Auto or Miracast; 
 
 Mirroring **works**: the car displays the live phone screen. Two open problems:
 
-1. **Heavy stutter** on the car screen (not just latency; frames visibly stall).
-2. **The app crashed** after mirroring for a while. Crash report not yet captured.
+1. **Heavy stutter** on the car screen (not just latency; frames visibly stall). Being tested: a
+   "Mirror quality" choice in the app (see below).
+2. **The app crashed** after mirroring for a while. The phone's crash log (read over adb at
+   09:15) holds only `ForegroundServiceDidNotStartInTimeException` crashes from before the
+   08:31 fix, and nothing from the build installed at 08:41. So this was probably the
+   foreground-service bug, which is already fixed.
+
+### Mirror quality presets (`MirrorQuality.kt`)
+
+- **As now** (default): 1280 px, 30 fps, 4 Mbps. The setup that first worked; unchanged.
+- **Smoother**: 960 px, 24 fps, 2.5 Mbps.
+- **Lightest**: 720 px, 20 fps, 1.5 Mbps.
+
+Smoother and Lightest also do two other things:
+- They cap the frames sent to the encoder. The phone's screen runs at up to 120 Hz, so without a
+  cap the encoder can receive far more frames than it is tuned for.
+- They give the car its own send queue. If the car falls about 1 s behind, the queue is dropped
+  and the stream resumes at the next keyframe, so a slow car never stalls the encoder.
+
+If the car stutters less on Smoother, the next step is to find out which change helped.
 
 ## Fixes already made on top of upstream (weiw0923/ScreenShare)
 

@@ -30,6 +30,7 @@ class MirrorService : Service() {
     companion object {
         const val EXTRA_RESULT_CODE = "result_code"
         const val EXTRA_DATA = "data"
+        const val EXTRA_QUALITY = "quality"
         private const val CHANNEL_ID = "mirror"
         const val ACTION_STOP = "com.screenshare.send.MIRROR_STOP"
 
@@ -78,7 +79,7 @@ class MirrorService : Service() {
         if (code != Activity.RESULT_OK || data == null) {
             stopForeground(true); stopSelf(); return START_NOT_STICKY
         }
-        startMirror(code, data)
+        startMirror(code, data, MirrorQuality.fromName(intent?.getStringExtra(EXTRA_QUALITY)))
         return START_STICKY
     }
 
@@ -111,9 +112,9 @@ class MirrorService : Service() {
         }
     }
 
-    private fun startMirror(resultCode: Int, data: Intent) {
+    private fun startMirror(resultCode: Int, data: Intent, quality: MirrorQuality) {
         try {
-            startMirrorInner(resultCode, data)
+            startMirrorInner(resultCode, data, quality)
         } catch (e: Throwable) {
             android.util.Log.e("MirrorService", "startMirror failed", e)
             CrashLog.save(this, e)
@@ -121,14 +122,14 @@ class MirrorService : Service() {
         }
     }
 
-    private fun startMirrorInner(resultCode: Int, data: Intent) {
+    private fun startMirrorInner(resultCode: Int, data: Intent, quality: MirrorQuality) {
         val metrics: DisplayMetrics = resources.displayMetrics
-        // scale to keep long side <= 1280 for bandwidth sanity
+        // scale the long side down to the preset's limit for bandwidth sanity
         var w = metrics.widthPixels
         var h = metrics.heightPixels
         val longSide = maxOf(w, h)
-        if (longSide > 1280) {
-            val scale = 1280f / longSide
+        if (longSide > quality.longSide) {
+            val scale = quality.longSide.toFloat() / longSide
             w = (w * scale / 2).toInt() * 2
             h = (h * scale / 2).toInt() * 2
         }
@@ -143,8 +144,11 @@ class MirrorService : Service() {
 
         val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, w, h).apply {
             setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
-            setInteger(MediaFormat.KEY_BIT_RATE, 4_000_000)
-            setInteger(MediaFormat.KEY_FRAME_RATE, 30)
+            setInteger(MediaFormat.KEY_BIT_RATE, quality.bitRate)
+            setInteger(MediaFormat.KEY_FRAME_RATE, quality.fps)
+            if (quality.capFps && Build.VERSION.SDK_INT >= 29) {
+                setFloat(MediaFormat.KEY_MAX_FPS_TO_ENCODER, quality.fps.toFloat())
+            }
             setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
             setInteger(MediaFormat.KEY_PRIORITY, 0)
             if (Build.VERSION.SDK_INT >= 30) setInteger(MediaFormat.KEY_LATENCY, 1)
@@ -165,6 +169,8 @@ class MirrorService : Service() {
 
         MirrorServer.onClientConnected = { requestSyncFrame() }
         MirrorServer.psiSource = { muxer.buildPatPmt() }
+        MirrorServer.skipWhenBehind = quality.skipWhenBehind
+        MirrorServer.maxQueuedBytes = quality.bitRate / 8   // about one second of video
         MirrorServer.start()
         muxer.setHasAudio(false)
         try {
@@ -323,7 +329,15 @@ class MirrorService : Service() {
                         }
                     }
                     c.releaseOutputBuffer(idx, false)
-                } catch (_: Throwable) { break }
+                } catch (t: Throwable) {
+                    // Stopping the codec also lands here. Only a failure mid-stream is worth reporting:
+                    // it ends the stream silently, so save it for the error report on next launch.
+                    if (draining) {
+                        android.util.Log.e("MirrorService", "encoder loop stopped", t)
+                        CrashLog.save(this@MirrorService, t, "encoder")
+                    }
+                    break
+                }
             }
         }
     }
