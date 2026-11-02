@@ -2,6 +2,8 @@ name: Build APK
 on:
   workflow_dispatch:
   push:
+permissions:
+  contents: write
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -20,3 +22,10 @@ jobs:
         with:
           name: ScreenShare-apk
           path: sender/app/build/outputs/apk/debug/*.apk
+      - name: Publish APK to apk branch
+        run: |
+          mkdir out && cp sender/app/build/outputs/apk/debug/*.apk out/ScreenShare.apk
+          cd out && git init -q && git checkout -q -b apk
+          git config user.name "github-actions" && git config user.email "actions@github.com"
+          git add ScreenShare.apk && git commit -q -m "Built APK"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" apk
