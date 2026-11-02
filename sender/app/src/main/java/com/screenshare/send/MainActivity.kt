@@ -84,7 +84,7 @@ class MainActivity : Activity() {
         titleRow.addView(TextView(this).apply { text = "Share"; textSize = 30f; setTextColor(0xFFFFC53D.toInt()) })
 
         val deviceSection = TextView(this).apply {
-            text = "── 电视 ──"
+            text = "── Display ──"
             textSize = 13f
             gravity = Gravity.CENTER
             setTextColor(0xFF9E7FA8.toInt())
@@ -94,7 +94,7 @@ class MainActivity : Activity() {
         }
 
         statusView = TextView(this).apply {
-            text = "正在搜索电视…"
+            text = "Searching for displays…"
             textSize = 16f
             setTextColor(0xFFFFC9A8.toInt())
             gravity = Gravity.CENTER
@@ -107,43 +107,43 @@ class MainActivity : Activity() {
         }
 
         deviceButton = Button(this).apply {
-            text = "选择电视"
+            text = "Choose display"
             visibility = View.GONE
         }
         pickButton = Button(this).apply {
-            text = "选择要投的视频"
+            text = "Choose a video to cast"
             visibility = View.GONE
         }
         mirrorButton = Button(this).apply {
-            text = "屏幕镜像（投整个手机屏幕）"
+            text = "Screen mirror (whole phone screen)"
             visibility = View.GONE
             setOnClickListener { startMirrorFlow() }
         }
         urlButton = Button(this).apply {
-            text = "投在线视频链接"
+            text = "Cast an online video link"
             visibility = View.GONE
             setOnClickListener {
                 val input = android.widget.EditText(this@MainActivity).apply {
-                    hint = "粘贴视频直链 (http…mp4 等)"
+                    hint = "Paste a direct video link (http…mp4 etc)"
                     inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_URI
                 }
                 android.app.AlertDialog.Builder(this@MainActivity)
-                    .setTitle("投在线视频")
+                    .setTitle("Cast online video")
                     .setView(input)
-                    .setPositiveButton("投屏") { _, _ ->
+                    .setPositiveButton("Cast") { _, _ ->
                         val u = input.text.toString().trim()
                         if (u.startsWith("http")) {
                             val e = endpoints ?: return@setPositiveButton
-                            statusView.text = "投屏中…"
-                            DlnaController.setUriAndPlay(e, u, "在线视频") { ok ->
+                            statusView.text = "Casting…"
+                            DlnaController.setUriAndPlay(e, u, "Online video") { ok ->
                                 runOnUiThread {
-                                    if (ok) { statusView.text = "正在电视上播放链接"; controlsRow.visibility = View.VISIBLE }
-                                    else toast("投屏失败：链接不可播或被拒绝")
+                                    if (ok) { statusView.text = "Playing link on display"; controlsRow.visibility = View.VISIBLE }
+                                    else toast("Cast failed: link not playable or refused")
                                 }
                             }
-                        } else toast("请输入 http 开头的链接")
+                        } else toast("Enter a link starting with http")
                     }
-                    .setNegativeButton("取消", null)
+                    .setNegativeButton("Cancel", null)
                     .show()
             }
         }
@@ -151,28 +151,28 @@ class MainActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
             visibility = View.GONE
-            val b1 = Button(this@MainActivity).apply { text = "暂停" }
-            val b2 = Button(this@MainActivity).apply { text = "停止" }
+            val b1 = Button(this@MainActivity).apply { text = "Pause" }
+            val b2 = Button(this@MainActivity).apply { text = "Stop" }
             val b3 = Button(this@MainActivity).apply { text = "-30s" }
             val b4 = Button(this@MainActivity).apply { text = "+30s" }
             b3.setOnClickListener {
                 endpoints?.let { e -> DlnaController.getPosition(e) { pos ->
                     val now = pos?.first ?: 0
-                    DlnaController.seekTo(e, (now - 30).coerceAtLeast(0)) { ok -> toast(if (ok) "已后退" else "Seek 失败") }
+                    DlnaController.seekTo(e, (now - 30).coerceAtLeast(0)) { ok -> toast(if (ok) "Skipped back" else "Seek failed") }
                 } }
             }
             b4.setOnClickListener {
                 endpoints?.let { e -> DlnaController.getPosition(e) { pos ->
                     val now = pos?.first ?: 0
-                    DlnaController.seekTo(e, now + 30) { ok -> toast(if (ok) "已前进" else "Seek 失败") }
+                    DlnaController.seekTo(e, now + 30) { ok -> toast(if (ok) "Skipped forward" else "Seek failed") }
                 } }
             }
-            b1.setOnClickListener { endpoints?.let { e -> DlnaController.pause(e) { ok -> toast(if (ok) "已暂停" else "暂停失败") } } }
+            b1.setOnClickListener { endpoints?.let { e -> DlnaController.pause(e) { ok -> toast(if (ok) "Paused" else "Pause failed") } } }
             b2.setOnClickListener {
-                endpoints?.let { e -> DlnaController.stop(e) { ok -> toast(if (ok) "已停止" else "停止失败") } }
+                endpoints?.let { e -> DlnaController.stop(e) { ok -> toast(if (ok) "Stopped" else "Stop failed") } }
                 if (MirrorService.isRunning) {
                     startService(Intent(this@MainActivity, MirrorService::class.java).apply { action = MirrorService.ACTION_STOP })
-                    statusView.text = "镜像已停止\n选择要投的内容"
+                    statusView.text = "Mirroring stopped\nChoose what to cast"
                 }
             }
             addView(b1); addView(b2); addView(b3); addView(b4)
@@ -194,7 +194,7 @@ class MainActivity : Activity() {
         root.addView(statusView)
         root.addView(deviceButton)
         val contentSection = TextView(this).apply {
-            text = "── 投什么 ──"
+            text = "── What to cast ──"
             textSize = 13f
             gravity = Gravity.CENTER
             setTextColor(0xFF9E7FA8.toInt())
@@ -207,7 +207,7 @@ class MainActivity : Activity() {
         root.addView(mirrorButton)
         root.addView(urlButton)
         val ctlSection = TextView(this).apply {
-            text = "── 控制 ──"
+            text = "── Controls ──"
             textSize = 13f
             gravity = Gravity.CENTER
             setTextColor(0xFF9E7FA8.toInt())
@@ -232,7 +232,7 @@ class MainActivity : Activity() {
 
     @SuppressLint("SetTextI18n")
     private fun startSearch() {
-        statusView.text = "正在搜索电视…"
+        statusView.text = "Searching for displays…"
         spinner.visibility = View.VISIBLE
         deviceButton.visibility = View.GONE
         pickButton.visibility = View.GONE
@@ -248,7 +248,7 @@ class MainActivity : Activity() {
                         val verified = java.util.Collections.synchronizedList(mutableListOf<CastDevice>())
                         if (ips.isEmpty()) {
                             runOnUiThread {
-                                statusView.text = "没有找到电视\n\n手机和电视可能不在同一网段\n用底部按钮手动输入电视 IP"
+                                statusView.text = "No display found\n\nPhone and display may be on different networks\nUse the button below to enter the IP manually"
                                 addRefreshButton()
                                 addManualEntryButton()
                             }
@@ -262,7 +262,7 @@ class MainActivity : Activity() {
                                     runOnUiThread {
                                         if (verified.isNotEmpty()) chooseFrom(verified.toList())
                                         else {
-                                            statusView.text = "没有找到电视\n\n用底部按钮手动输入电视 IP"
+                                            statusView.text = "No display found\n\nUse the button below to enter the IP manually"
                                             addRefreshButton()
                                             addManualEntryButton()
                                         }
@@ -284,7 +284,7 @@ class MainActivity : Activity() {
     private fun addRefreshButton() {
         if (refreshButton == null) {
             refreshButton = Button(this).apply {
-                text = "重新搜索"
+                text = "Search again"
                 setOnClickListener { removeView(this); removeManual(); startSearch() }
             }
             rootLayout.addView(refreshButton)
@@ -294,22 +294,22 @@ class MainActivity : Activity() {
     private fun addManualEntryButton() {
         if (manualButton == null) {
             manualButton = Button(this).apply {
-                text = "手动输入电视 IP"
+                text = "Enter display IP manually"
                 setOnClickListener {
                     val input = android.widget.EditText(this@MainActivity).apply {
-                        hint = "电视的 IP，例如 192.168.0.109"
+                        hint = "Display IP, e.g. 192.168.0.109"
                         inputType = android.text.InputType.TYPE_CLASS_PHONE
                     }
                     android.app.AlertDialog.Builder(this@MainActivity)
-                        .setTitle("手动连接")
+                        .setTitle("Manual connect")
                         .setView(input)
-                        .setPositiveButton("连接") { _, _ ->
+                        .setPositiveButton("Connect") { _, _ ->
                             val ip = input.text.toString().trim()
                             if (ip.isNotEmpty()) {
                                 connect(CastDevice("", "http://$ip:49152/description.xml", ip))
                             }
                         }
-                        .setNegativeButton("取消", null)
+                        .setNegativeButton("Cancel", null)
                         .show()
                 }
             }
@@ -334,34 +334,34 @@ class MainActivity : Activity() {
         if (devices.size == 1) {
             connect(devices[0])
         } else {
-            statusView.text = "找到 ${devices.size} 台设备，点击选择"
+            statusView.text = "Found ${devices.size} device(s), tap to choose"
             deviceButton.visibility = View.VISIBLE
-            deviceButton.text = "选择电视 (${devices.size})"
+            deviceButton.text = "Choose display (${devices.size})"
         }
     }
 
     private fun showDevicePicker() {
         val names = pendingDevices.map { it.ip + (if (it.friendlyName.isNotBlank()) " · ${it.friendlyName}" else "") }
         android.app.AlertDialog.Builder(this)
-            .setTitle("选择电视")
+            .setTitle("Choose display")
             .setItems(names.toTypedArray()) { _, which -> connect(pendingDevices[which]) }
             .show()
     }
 
     @SuppressLint("SetTextI18n")
     private fun connect(device: CastDevice) {
-        statusView.text = "连接中：${device.ip}…"
+        statusView.text = "Connecting: ${device.ip}…"
         DlnaController.describe(device.descriptionUrl) { ep ->
             runOnUiThread {
                 if (ep == null) {
-                    statusView.text = "连接失败，点击重新搜索"
+                    statusView.text = "Connection failed, tap to search again"
                     addRefreshButton()
                 } else {
                     endpoints = ep
                     getPreferences(MODE_PRIVATE).edit().putString("last_tv_ip", device.ip).apply()
-                    deviceButton.text = "已连接：${ep.friendlyName}"
+                    deviceButton.text = "Connected: ${ep.friendlyName}"
                     deviceButton.visibility = View.VISIBLE
-                    statusView.text = "选择手机里的视频投上去"
+                    statusView.text = "Choose a video on your phone to cast"
                     pickButton.visibility = View.VISIBLE
                     mirrorButton.visibility = View.VISIBLE
                     urlButton.visibility = View.VISIBLE
@@ -407,17 +407,17 @@ class MainActivity : Activity() {
         }
         // 2) wait a moment for server, then push URL to TV
         android.os.Handler(mainLooper).postDelayed({
-            val ip = MirrorServer.localIp() ?: run { toast("获取手机 IP 失败"); return@postDelayed }
+            val ip = MirrorServer.localIp() ?: run { toast("Could not get phone IP"); return@postDelayed }
             val token = MirrorServer.streamToken
-            if (token.isEmpty()) { toast("镜像服务未就绪"); return@postDelayed }
-            statusView.text = "镜像推流中：$ip:8080/live.ts"
-            DlnaController.setUriAndPlay(e, "http://$ip:8080/live.ts?k=$token", "屏幕镜像") { ok ->
+            if (token.isEmpty()) { toast("Mirror service not ready"); return@postDelayed }
+            statusView.text = "Mirroring: $ip:8080/live.ts"
+            DlnaController.setUriAndPlay(e, "http://$ip:8080/live.ts?k=$token", "Screen mirror") { ok ->
                 runOnUiThread {
                     if (ok) {
-                        statusView.text = "正在电视上镜像手机屏幕"
+                        statusView.text = "Mirroring phone screen to display"
                         controlsRow.visibility = View.VISIBLE
                     } else {
-                        toast("镜像投屏被电视拒绝")
+                        toast("Display refused the mirror stream")
                     }
                 }
             }
@@ -449,7 +449,7 @@ class MainActivity : Activity() {
         if (requestCode == 77 && grantResults.firstOrNull() == android.content.pm.PackageManager.PERMISSION_GRANTED) {
             startMirrorFlow()
         } else if (requestCode == 77) {
-            toast("没有麦克风权限，将继续无声镜像")
+            toast("No microphone permission, mirroring without sound")
             val pmgr = getSystemService(MediaProjectionManager::class.java)
             pendingMirror = true
             @Suppress("DEPRECATION")
@@ -460,7 +460,7 @@ class MainActivity : Activity() {
     @SuppressLint("SetTextI18n")
     private fun castUri(uri: Uri) {
         val e = endpoints ?: return
-        statusView.text = "投屏中…"
+        statusView.text = "Casting…"
         // Serve the content through a local relay so the TV can read the SAF stream.
         LocalRelay.start(this, uri) { localUrl ->
             val url = if (LocalRelay.contentTypeFor(uri) != "video/mp4") "$localUrl?ct=${LocalRelay.contentTypeFor(uri)}" else localUrl
@@ -468,10 +468,10 @@ class MainActivity : Activity() {
             DlnaController.setUriAndPlay(e, url, name) { ok ->
                 runOnUiThread {
                     if (ok) {
-                        statusView.text = "正在电视上播放：$name"
+                        statusView.text = "Playing on display: $name"
                         controlsRow.visibility = View.VISIBLE
                     } else {
-                        statusView.text = "投屏失败：电视拒绝了请求"
+                        statusView.text = "Cast failed: display refused the request"
                     }
                 }
             }

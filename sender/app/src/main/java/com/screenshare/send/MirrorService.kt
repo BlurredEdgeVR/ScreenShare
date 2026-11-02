@@ -75,20 +75,20 @@ class MirrorService : Service() {
         val nm = getSystemService(NotificationManager::class.java)
         if (Build.VERSION.SDK_INT >= 26) {
             nm.createNotificationChannel(
-                NotificationChannel(CHANNEL_ID, "屏幕镜像", NotificationManager.IMPORTANCE_LOW)
+                NotificationChannel(CHANNEL_ID, "Screen mirror", NotificationManager.IMPORTANCE_LOW)
             )
         }
         val n: Notification = if (Build.VERSION.SDK_INT >= 26) {
             Notification.Builder(this, CHANNEL_ID)
-                .setContentTitle("ScreenShare 镜像中")
-                .setContentText("正在向电视传输屏幕画面")
+                .setContentTitle("ScreenShare mirroring")
+                .setContentText("Streaming screen to display")
                 .setSmallIcon(android.R.drawable.ic_menu_share)
                 .setOngoing(true)
                 .build()
         } else {
             @Suppress("DEPRECATION")
             Notification.Builder(this)
-                .setContentTitle("ScreenShare 镜像中")
+                .setContentTitle("ScreenShare mirroring")
                 .setSmallIcon(android.R.drawable.ic_menu_share)
                 .setOngoing(true)
                 .build()
