@@ -22,7 +22,7 @@ cd tv && ./gradlew assembleDebug            # receiver app (not built by CI)
 ./gradlew lint                              # standard AGP lint, no custom config
 ```
 
-- On this Mac, `adb` is at `~/Library/Android/sdk/platform-tools/adb` (not on PATH). Local Gradle builds don't work yet: only JDK 8 and SDK platform 30 are installed. So builds come from CI, and you install them by downloading `ScreenShare.apk` from the `apk` branch and running `adb install -r`.
+- On this Mac, `adb` is on PATH (Homebrew `android-platform-tools`). Local Gradle builds don't work yet: only JDK 8 and SDK platform 30 are installed. So builds come from CI, and you install them by downloading `ScreenShare.apk` from the `apk` branch and running `adb install -r`.
 - There are no tests in either project.
 - CI ([.github/workflows/build.yml](.github/workflows/build.yml)) builds only the sender debug APK on every push and force-pushes it to the `apk` branch as `ScreenShare.apk`. That is how builds reach the phone.
 - The sender's debug build is signed with the committed `sender/app/screenshare-debug.jks` (password `android`) so new builds install over old ones. Don't replace it, or the phone will need an uninstall first.

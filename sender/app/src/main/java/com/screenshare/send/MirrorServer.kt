@@ -123,6 +123,9 @@ object MirrorServer {
         var sink: Sink? = null
         try {
             sock.tcpNoDelay = true
+            // Android lets a socket hold ~4 MB unsent (over 10 s of video), which hides a slow
+            // display from the skip-ahead queue. Keep it small so the queue sees the backlog.
+            if (skipWhenBehind) sock.sendBufferSize = 64 * 1024
             val input = sock.getInputStream()
             val out = sock.getOutputStream()
             // read request head
