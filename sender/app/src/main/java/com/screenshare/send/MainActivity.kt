@@ -510,6 +510,11 @@ class MainActivity : Activity() {
             .setTitle("ScreenShare error report")
             .setMessage(log.take(3000))
             .setPositiveButton("OK", null)
+            .setNeutralButton("Copy") { _, _ ->
+                val cm = getSystemService(android.content.ClipboardManager::class.java)
+                cm.setPrimaryClip(android.content.ClipData.newPlainText("ScreenShare error", log))
+                toast("Error report copied")
+            }
             .show()
     }
 }

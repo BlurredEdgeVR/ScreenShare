@@ -61,17 +61,22 @@ class MirrorService : Service() {
             stopSelfSafely()
             return START_NOT_STICKY
         }
-        if (isRunning) return START_STICKY
-        val code = intent?.getIntExtra(EXTRA_RESULT_CODE, -1) ?: -1
-        @Suppress("DEPRECATION")
-        val data = intent?.getParcelableExtra<Intent>(EXTRA_DATA)
-        if (code < 0 || data == null) { stopSelf(); return START_NOT_STICKY }
-
+        // Always enter the foreground first: Android kills the app if a service started
+        // with startForegroundService() returns without doing so.
         try {
             startForegroundInternal()
         } catch (e: Throwable) {
             CrashLog.save(this, e)
             stopSelf(); return START_NOT_STICKY
+        }
+        if (isRunning) return START_STICKY
+        // RESULT_OK is -1, so the old "code < 0" check rejected every successful grant.
+        val code = intent?.getIntExtra(EXTRA_RESULT_CODE, Int.MIN_VALUE) ?: Int.MIN_VALUE
+        val data: Intent? = if (Build.VERSION.SDK_INT >= 33)
+            intent?.getParcelableExtra(EXTRA_DATA, Intent::class.java)
+        else @Suppress("DEPRECATION") intent?.getParcelableExtra(EXTRA_DATA)
+        if (code != Activity.RESULT_OK || data == null) {
+            stopForeground(true); stopSelf(); return START_NOT_STICKY
         }
         startMirror(code, data)
         return START_STICKY
