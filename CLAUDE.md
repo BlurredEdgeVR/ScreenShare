@@ -65,6 +65,15 @@ Then `DlnaController.playLiveStream` tells the renderer to fetch that URL.
 - `TsMuxer` is a hand-written MPEG-TS muxer: PAT on PID 0, PMT on 0x1000, H.264 on 0x100 (also the PCR PID), and AAC on 0x101 only if `setHasAudio(true)`. `buildPatPmt()` must build new packets on every call so continuity counters advance. Don't cache it.
 - Sound is optional ("Phone sound to car", pref `send_sound`, `EXTRA_SOUND`, off by default). `startAudio()` uses `AudioPlaybackCapture` on the projection, capturing USAGE_MEDIA, GAME and UNKNOWN, and encodes 44.1 kHz stereo AAC into PID 0x101. Android never lets navigation voices be captured, so Waze's voice still needs Bluetooth. `setHasAudio()` is decided before the server starts, because a PMT that lists audio with none arriving can stall a player. The old mic capture (which recorded the car cabin) is gone.
 
+**Car mode and reconnecting:**
+- Car mode is the "Car mode" button, plus a static shortcut (`res/xml/shortcuts.xml`) and a pinned shortcut, both sending `ACTION_CAR_MODE`. It reconnects to the saved display, retrying every 3 s while the phone joins the car's Wi-Fi. Then it starts the share prompt with the saved quality and sound settings, and opens Waze once the cast plays.
+- The car shows two displays (centre and passenger) on one IP, so the exact description URL is saved as `last_tv_desc`, next to `last_tv_ip`.
+- `MainActivity` passes the car's control URL to `MirrorService` (`EXTRA_CONTROL_URL`). The service's `CarKeeper` thread checks every 2 s:
+  - It closes connections whose writes have been stuck for 8 s (`MirrorServer.dropStalled`).
+  - Once the car has connected at least once, if no display is connected for 4 s, it re-sends Stop/SetAVTransportURI/Play. It waits while Wi-Fi is down.
+  - It gives up after 3 tries that don't hold for 20 s. The notification's Reconnect button starts the tries over.
+  - It ends mirroring after 10 minutes without the car, so the screen wake lock isn't held forever.
+
 **Casting files:** `LocalRelay` serves one SAF `content://` URI over HTTP on a random port, with `Range`/206 support so the renderer can seek. The content type comes from the file extension.
 
 **Crash capture:** `CrashLog` writes uncaught exceptions to `last_crash.txt`, and `MainActivity` shows them on the next launch. `MainActivity` also installs a second handler that shows the stack trace on screen right away.

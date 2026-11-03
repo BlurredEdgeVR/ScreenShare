@@ -67,6 +67,10 @@ to act like a slow car.
   limit which apps' sound is captured. Android still excludes navigation voices, so Waze's voice
   needs Bluetooth or the phone speaker.
 - Phone is set up for the next drive: Landscape, sound on, car IP saved.
+- Added **Car mode** (button and home-screen shortcut: wait for the car's Wi-Fi, mirror, open Waze)
+  and **auto-reconnect** (re-sends Play when the car drops the stream; Stop/Reconnect buttons in
+  the notification). The app now remembers which of the car's two displays (centre/passenger)
+  was picked.
 - Next: try Smoother in the car. If it still freezes often, try Lightest; the car's Wi-Fi may
   carry less than 2.5 Mbps.
 

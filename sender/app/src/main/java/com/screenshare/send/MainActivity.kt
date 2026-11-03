@@ -17,6 +17,16 @@ import android.widget.Toast
 
 class MainActivity : Activity() {
 
+    companion object {
+        /** Home-screen shortcut: connect to the saved car screen, start mirroring, open Waze. */
+        const val ACTION_CAR_MODE = "com.screenshare.send.CAR_MODE"
+    }
+
+    private var carMode = false
+    private var carModeStarted = false
+    private var connectTries = 0
+    private lateinit var carButton: Button
+
     private var endpoints: RendererEndpoints? = null
     private lateinit var statusView: TextView
     private lateinit var deviceButton: Button
@@ -113,6 +123,11 @@ class MainActivity : Activity() {
         deviceButton = Button(this).apply {
             text = "Choose display"
             visibility = View.GONE
+        }
+        carButton = Button(this).apply {
+            text = "Car mode: mirror and open Waze"
+            visibility = View.GONE
+            setOnClickListener { carMode = true; carModeStarted = true; startMirrorFlow() }
         }
         pickButton = Button(this).apply {
             text = "Choose a video to cast"
@@ -218,6 +233,7 @@ class MainActivity : Activity() {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         }
         root.addView(contentSection)
+        root.addView(carButton)
         root.addView(pickButton)
         root.addView(mirrorButton)
         root.addView(qualityButton)
@@ -234,6 +250,10 @@ class MainActivity : Activity() {
         }
         root.addView(ctlSection)
         root.addView(controlsRow)
+        root.addView(Button(this).apply {
+            text = "Add Car mode to home screen"
+            setOnClickListener { pinCarModeShortcut() }
+        })
         rootLayout = root
         // Scrolls, so the controls stay reachable when the phone is sideways in a car mount.
         setContentView(android.widget.ScrollView(this).apply {
@@ -244,9 +264,17 @@ class MainActivity : Activity() {
 
         deviceButton.setOnClickListener { showDevicePicker() }
         pickButton.setOnClickListener { pickVideo() }
-        val lastIp = getPreferences(MODE_PRIVATE).getString("last_tv_ip", null)
+        carMode = intent?.action == ACTION_CAR_MODE
+        if (carMode && MirrorService.isRunning) openWaze()
+        val prefs = getPreferences(MODE_PRIVATE)
+        val lastIp = prefs.getString("last_tv_ip", null)
+        // The car shows two displays (centre and passenger) on one IP, so reuse the exact
+        // description URL that was picked, as long as it still belongs to the saved IP.
+        val lastDesc = prefs.getString("last_tv_desc", null)?.takeIf {
+            try { java.net.URL(it).host == lastIp } catch (_: Exception) { false }
+        }
         if (lastIp != null) {
-            connect(CastDevice("", "http://$lastIp:49152/description.xml", lastIp))
+            connect(CastDevice("", lastDesc ?: "http://$lastIp:49152/description.xml", lastIp))
         } else {
             startSearch()
         }
@@ -376,11 +404,21 @@ class MainActivity : Activity() {
         DlnaController.describe(device.descriptionUrl) { ep ->
             runOnUiThread {
                 if (ep == null) {
+                    if (carMode && connectTries < 40) {
+                        // The phone can take a while to join the car's Wi-Fi after getting in.
+                        connectTries++
+                        statusView.text = "Car mode: waiting for the car's Wi-Fi…"
+                        android.os.Handler(mainLooper).postDelayed({ connect(device) }, 3000)
+                        return@runOnUiThread
+                    }
                     statusView.text = "Connection failed, tap to search again"
                     addRefreshButton()
                 } else {
                     endpoints = ep
-                    getPreferences(MODE_PRIVATE).edit().putString("last_tv_ip", device.ip).apply()
+                    getPreferences(MODE_PRIVATE).edit()
+                        .putString("last_tv_ip", device.ip)
+                        .putString("last_tv_desc", device.descriptionUrl)
+                        .apply()
                     deviceButton.text = "Connected: ${ep.friendlyName}"
                     deviceButton.visibility = View.VISIBLE
                     statusView.text = "Choose a video on your phone to cast"
@@ -389,7 +427,16 @@ class MainActivity : Activity() {
                     qualityButton.visibility = View.VISIBLE
                     soundButton.visibility = View.VISIBLE
                     urlButton.visibility = View.VISIBLE
+                    carButton.visibility = View.VISIBLE
                     refreshButton?.let { removeView(it) }
+                    if (MirrorService.isRunning) {
+                        statusView.text = "Mirroring to ${ep.friendlyName}"
+                        controlsRow.visibility = View.VISIBLE
+                    } else if (carMode && !carModeStarted) {
+                        carModeStarted = true
+                        statusView.text = "Car mode: starting…"
+                        startMirrorFlow()
+                    }
                 }
             }
         }
@@ -420,6 +467,8 @@ class MainActivity : Activity() {
             putExtra(MirrorService.EXTRA_DATA, data)
             putExtra(MirrorService.EXTRA_QUALITY, mirrorQuality().name)
             putExtra(MirrorService.EXTRA_SOUND, soundOn())
+            putExtra(MirrorService.EXTRA_CONTROL_URL, e.avTransportControlUrl)
+            putExtra(MirrorService.EXTRA_RENDERER_NAME, e.friendlyName)
         }
         try {
             if (android.os.Build.VERSION.SDK_INT >= 26) startForegroundService(svc) else startService(svc)
@@ -440,6 +489,7 @@ class MainActivity : Activity() {
                     if (ok) {
                         statusView.text = "Mirroring phone screen to display"
                         controlsRow.visibility = View.VISIBLE
+                        if (carMode) openWaze()
                     } else {
                         showReport("Display refused the mirror stream", DlnaController.takeErrorLog().ifBlank { DlnaController.lastError } + "\n\n" + DlnaController.info)
                     }
@@ -561,6 +611,38 @@ class MainActivity : Activity() {
             if (idx >= 0 && c.moveToFirst()) c.getString(idx) else null
         }
     } catch (_: Exception) { null }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (intent.action != ACTION_CAR_MODE) return
+        carMode = true
+        when {
+            MirrorService.isRunning -> openWaze()
+            endpoints != null && !carModeStarted -> { carModeStarted = true; startMirrorFlow() }
+        }
+    }
+
+    private fun openWaze() {
+        val i = packageManager.getLaunchIntentForPackage("com.waze") ?: return
+        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        try { startActivity(i) } catch (_: Exception) {}
+    }
+
+    private fun pinCarModeShortcut() {
+        val sm = getSystemService(android.content.pm.ShortcutManager::class.java)
+        if (sm == null || !sm.isRequestPinShortcutSupported) {
+            toast("Long-press the ScreenShare icon and drag Car mode to your home screen")
+            return
+        }
+        val info = android.content.pm.ShortcutInfo.Builder(this, "car_mode_home")
+            .setShortLabel("Car mode")
+            .setLongLabel("ScreenShare car mode")
+            .setIcon(android.graphics.drawable.Icon.createWithResource(this, R.mipmap.ic_launcher))
+            .setIntent(Intent(ACTION_CAR_MODE).setClass(this, MainActivity::class.java))
+            .build()
+        sm.requestPinShortcut(info, null)
+    }
 
     override fun onDestroy() {
         super.onDestroy()

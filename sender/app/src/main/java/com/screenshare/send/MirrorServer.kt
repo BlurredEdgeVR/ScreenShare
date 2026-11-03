@@ -23,8 +23,10 @@ object MirrorServer {
      * One connected display. A [queued] sink is fed by its own writer thread, so a slow
      * display only backs up its own queue. Otherwise [broadcast] writes to it directly.
      */
-    private class Sink(val out: OutputStream, val queued: Boolean) {
+    private class Sink(val sock: Socket, val out: OutputStream, val queued: Boolean) {
         @Volatile var primed = false
+        /** Last time a write to this display went through; a stuck display stops updating it. */
+        @Volatile var lastWriteMs = System.currentTimeMillis()
         val queue = LinkedBlockingQueue<ByteArray>()
         val queuedBytes = AtomicLong()
 
@@ -163,7 +165,7 @@ object MirrorServer {
             )
             out.flush()
             if (req.startsWith("HEAD ")) { sock.close(); return }
-            val added = Sink(out, skipWhenBehind)
+            val added = Sink(sock, out, skipWhenBehind)
             sink = added
             synchronized(writeLock) { clients.add(added) }
             try { onClientConnected?.invoke() } catch (_: Exception) {}
@@ -174,6 +176,7 @@ object MirrorServer {
                     added.queuedBytes.addAndGet(-chunk.size.toLong())
                     out.write(chunk)
                     out.flush()
+                    added.lastWriteMs = System.currentTimeMillis()
                 }
             } else {
                 // block until client goes away
@@ -222,6 +225,7 @@ object MirrorServer {
                     if (!c.primed) continue
                     c.out.write(ts)
                     c.out.flush()
+                    c.lastWriteMs = System.currentTimeMillis()
                 } catch (_: Exception) {
                     dead.add(c)
                 }
@@ -246,6 +250,25 @@ object MirrorServer {
                 }
             }
             if (dead.isNotEmpty()) clients.removeAll(dead)
+        }
+    }
+
+    /** Displays currently connected to the stream. */
+    fun clientCount(): Int = clients.size
+
+    /**
+     * Closes connections whose writes have been stuck for [maxAgeMs]. A display that vanished
+     * (Wi-Fi dropped) can leave a write blocked for minutes; closing the socket unblocks it, and
+     * the normal error path then removes the display. Doesn't take [writeLock], which a stuck
+     * write may be holding.
+     */
+    fun dropStalled(maxAgeMs: Long) {
+        val now = System.currentTimeMillis()
+        for (c in clients) {
+            if (now - c.lastWriteMs > maxAgeMs) {
+                try { c.sock.close() } catch (_: Exception) {}
+                clients.remove(c)
+            }
         }
     }
 

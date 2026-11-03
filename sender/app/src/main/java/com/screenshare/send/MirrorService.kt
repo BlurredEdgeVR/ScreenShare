@@ -34,6 +34,17 @@ class MirrorService : Service() {
         const val EXTRA_SOUND = "sound"
         private const val CHANNEL_ID = "mirror"
         const val ACTION_STOP = "com.screenshare.send.MIRROR_STOP"
+        const val ACTION_RECONNECT = "com.screenshare.send.MIRROR_RECONNECT"
+        /** The car's AVTransport control URL and name, so the service can recast on its own. */
+        const val EXTRA_CONTROL_URL = "control_url"
+        const val EXTRA_RENDERER_NAME = "renderer_name"
+
+        // Car reconnect timing (CarKeeper)
+        private const val GRACE_MS = 4_000L        // a gap this short is the car re-requesting, not a loss
+        private const val STALL_MS = 8_000L        // writes stuck this long: the car is gone
+        private const val HOLD_MS = 20_000L        // connected this long counts as recovered
+        private const val RETRY_MS = 10_000L       // time for the car to pick the stream up again
+        private const val GIVE_UP_MS = 10 * 60_000L
 
         @Volatile var isRunning = false
         var requestStart: ((Activity) -> Unit)? = null
@@ -56,13 +67,26 @@ class MirrorService : Service() {
     private var audioCodec: MediaCodec? = null
     private var audioRecord: android.media.AudioRecord? = null
     @Volatile private var audioRunning = false
+    @Volatile private var target: RendererEndpoints? = null
+    private var keeper: CarKeeper? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
+            target?.let { car -> DlnaController.stop(car) { } }
             stopSelfSafely()
             return START_NOT_STICKY
+        }
+        if (intent?.action == ACTION_RECONNECT) {
+            if (!isRunning) { stopSelf(); return START_NOT_STICKY }
+            keeper?.reconnectNow()
+            return START_STICKY
+        }
+        if (!isRunning) {
+            target = intent?.getStringExtra(EXTRA_CONTROL_URL)?.let { url ->
+                RendererEndpoints(intent?.getStringExtra(EXTRA_RENDERER_NAME) ?: "", url)
+            }
         }
         // Always enter the foreground first: Android kills the app if a service started
         // with startForegroundService() returns without doing so.
@@ -87,32 +111,46 @@ class MirrorService : Service() {
     }
 
     private fun startForegroundInternal() {
+        val n = buildNotification("Streaming screen to display")
+        if (Build.VERSION.SDK_INT >= 29) {
+            startForeground(1001, n, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
+        } else {
+            startForeground(1001, n)
+        }
+    }
+
+    /** Notification with Stop (and Reconnect, once the car is known), so the app needn't be open. */
+    private fun buildNotification(text: String): Notification {
         val nm = getSystemService(NotificationManager::class.java)
         if (Build.VERSION.SDK_INT >= 26) {
             nm.createNotificationChannel(
                 NotificationChannel(CHANNEL_ID, "Screen mirror", NotificationManager.IMPORTANCE_LOW)
             )
         }
-        val n: Notification = if (Build.VERSION.SDK_INT >= 26) {
-            Notification.Builder(this, CHANNEL_ID)
-                .setContentTitle("ScreenShare mirroring")
-                .setContentText("Streaming screen to display")
-                .setSmallIcon(android.R.drawable.ic_menu_share)
-                .setOngoing(true)
-                .build()
-        } else {
-            @Suppress("DEPRECATION")
-            Notification.Builder(this)
-                .setContentTitle("ScreenShare mirroring")
-                .setSmallIcon(android.R.drawable.ic_menu_share)
-                .setOngoing(true)
-                .build()
+        val flags = android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
+        val b = if (Build.VERSION.SDK_INT >= 26) Notification.Builder(this, CHANNEL_ID)
+            else @Suppress("DEPRECATION") Notification.Builder(this)
+        b.setContentTitle("ScreenShare mirroring")
+            .setContentText(text)
+            .setSmallIcon(android.R.drawable.ic_menu_share)
+            .setOngoing(true)
+        packageManager.getLaunchIntentForPackage(packageName)?.let {
+            b.setContentIntent(android.app.PendingIntent.getActivity(this, 0, it, flags))
         }
-        if (Build.VERSION.SDK_INT >= 29) {
-            startForeground(1001, n, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
-        } else {
-            startForeground(1001, n)
+        val stop = android.app.PendingIntent.getService(this, 1,
+            Intent(this, MirrorService::class.java).setAction(ACTION_STOP), flags)
+        b.addAction(Notification.Action.Builder(null as android.graphics.drawable.Icon?, "Stop", stop).build())
+        if (target != null) {
+            val again = android.app.PendingIntent.getService(this, 2,
+                Intent(this, MirrorService::class.java).setAction(ACTION_RECONNECT), flags)
+            b.addAction(Notification.Action.Builder(null as android.graphics.drawable.Icon?, "Reconnect", again).build())
         }
+        return b.build()
+    }
+
+    private fun updateNotification(text: String) {
+        if (!isRunning) return
+        try { getSystemService(NotificationManager::class.java).notify(1001, buildNotification(text)) } catch (_: Exception) {}
     }
 
     private fun startMirror(resultCode: Int, data: Intent, quality: MirrorQuality, sound: Boolean) {
@@ -207,6 +245,7 @@ class MirrorService : Service() {
         isRunning = true
         drainCodec()
         startPsiRefresh()
+        target?.let { car -> keeper = CarKeeper(car).also { it.start() } }
     }
 
     private fun requestSyncFrame() {
@@ -464,6 +503,8 @@ class MirrorService : Service() {
     }
 
     private fun stopSelfSafely() {
+        keeper?.halt()
+        keeper = null
         isRunning = false
         draining = false
         audioRunning = false
@@ -487,8 +528,78 @@ class MirrorService : Service() {
         try { projection?.stop() } catch (_: Exception) {}
         try { MirrorServer.stop() } catch (_: Exception) {}
         virtualDisplay = null; codec = null; projection = null; surface = null
+        target = null
         stopForeground(true)
         stopSelf()
+    }
+
+    /**
+     * Gets the car back when it drops the stream (a Wi-Fi blip, or its player giving up). The
+     * capture keeps running, so it only has to tell the car to play the stream again, with no
+     * share prompt. It gives up after three tries that don't hold for 20 s (the Reconnect button
+     * starts over), and ends mirroring after 10 minutes without the car, so a phone left behind
+     * doesn't keep its screen on.
+     */
+    private inner class CarKeeper(private val car: RendererEndpoints) : Thread("CarKeeper") {
+        @Volatile private var running = true
+        @Volatile private var reconnectRequested = false
+        private var everConnected = false
+        private var lastSeen = System.currentTimeMillis()
+        private var connectedSince = 0L
+        private var failures = 0
+        private var nextAttempt = 0L
+        private var gaveUp = false
+        private var shown = ""
+
+        init { isDaemon = true }
+
+        fun halt() { running = false; interrupt() }
+
+        fun reconnectNow() { reconnectRequested = true; interrupt() }
+
+        override fun run() {
+            while (running) {
+                try { Thread.sleep(2_000) } catch (_: InterruptedException) { if (!running) return }
+                try { tick() } catch (t: Throwable) { android.util.Log.w("CarKeeper", "tick failed", t) }
+            }
+        }
+
+        private fun tick() {
+            val now = System.currentTimeMillis()
+            if (reconnectRequested) {
+                reconnectRequested = false
+                failures = 0; gaveUp = false; nextAttempt = 0; everConnected = true
+                lastSeen = now - GRACE_MS
+            }
+            MirrorServer.dropStalled(STALL_MS)
+            if (MirrorServer.clientCount() > 0) {
+                everConnected = true
+                if (connectedSince == 0L) connectedSince = now
+                if (now - connectedSince > HOLD_MS) failures = 0
+                lastSeen = now
+                show("Streaming to ${car.friendlyName.ifBlank { "the car" }}")
+                return
+            }
+            connectedSince = 0
+            if (now - lastSeen > GIVE_UP_MS) {
+                running = false
+                android.os.Handler(android.os.Looper.getMainLooper()).post { stopSelfSafely() }
+                return
+            }
+            if (!everConnected || gaveUp) return
+            if (now - lastSeen < GRACE_MS || now < nextAttempt) return
+            val ip = MirrorServer.localIp()
+            if (ip == null) { show("Waiting for the car's Wi-Fi…"); return }
+            if (failures >= 3) { gaveUp = true; show("Lost the car. Tap Reconnect to try again."); return }
+            failures++
+            nextAttempt = now + RETRY_MS
+            show("Reconnecting to the car…")
+            DlnaController.playLiveStream(car, "http://$ip:8080/live.ts?k=${MirrorServer.streamToken}", "Screen mirror") { }
+        }
+
+        private fun show(text: String) {
+            if (text != shown) { shown = text; updateNotification(text) }
+        }
     }
 
     override fun onDestroy() {

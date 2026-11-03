@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Long-press the app icon for "Car mode"; drag it to the home screen for a one-tap start. -->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="car_mode"
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/car_mode_short"
+        android:shortcutLongLabel="@string/car_mode_long">
+        <intent
+            android:action="com.screenshare.send.CAR_MODE"
+            android:targetPackage="com.screenshare.send"
+            android:targetClass="com.screenshare.send.MainActivity" />
+    </shortcut>
+</shortcuts>
