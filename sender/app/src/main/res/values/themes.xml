@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The screen is drawn dark in code (see Ui.kt). A dark base theme matches it, so dialogs
+         are dark too and Samsung's dark mode doesn't repaint the app's colours. -->
+    <color name="bg">#FF241432</color>
+    <style name="AppTheme" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:colorAccent">#FFFFC53D</item>
+        <item name="android:windowBackground">@color/bg</item>
+        <item name="android:statusBarColor">@color/bg</item>
+        <item name="android:navigationBarColor">@color/bg</item>
+    </style>
+</resources>
