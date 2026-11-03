@@ -7,10 +7,11 @@ import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 
 /**
- * Sends all of this app's traffic over Wi-Fi. The car's casting hotspot has no internet, so with
- * "switch to mobile data" on, Android routes everything else over 4G. Without this, the app's
- * requests to the car would follow the phone onto 4G and never reach it. The app itself never
- * needs the internet, so binding the whole process is safe.
+ * Keeps the phone on the car's Wi-Fi and sends all of this app's traffic over it. The car's casting
+ * hotspot has no internet, so with `network_avoid_bad_wifi` on, Android uses 4G for internet and
+ * may drop a Wi-Fi nobody asks for. Requesting the Wi-Fi keeps it connected, and binding the
+ * process stops the app's requests to the car from following the phone onto 4G. The app itself
+ * never needs the internet, so binding the whole process is safe.
  */
 object WifiRoute {
     @Volatile private var bound: Network? = null
@@ -41,9 +42,13 @@ object WifiRoute {
             .removeCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
             .build()
         try {
-            cm.registerNetworkCallback(request, cb)
+            // A request, not just a listener: it tells Android this app needs the Wi-Fi, so the
+            // phone stays connected to the car's hotspot even while 4G carries the internet.
+            cm.requestNetwork(request, cb)
             callback = cb
-        } catch (_: Exception) {}
+        } catch (_: Exception) {
+            try { cm.registerNetworkCallback(request, cb); callback = cb } catch (_: Exception) {}
+        }
     }
 
     private fun bind(cm: ConnectivityManager, network: Network) {

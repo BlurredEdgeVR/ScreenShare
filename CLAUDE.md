@@ -36,7 +36,7 @@ The sender uses only the plain Android SDK. Its UI is built in code in `MainActi
 
 **Finding a renderer:** `DlnaDiscoverer` sends SSDP `M-SEARCH` and collects `LOCATION` URLs. If nothing answers, `SubnetScanner` probes TCP 49152 across the Wi-Fi /24, and `MainActivity` checks each hit by fetching `http://<ip>:49152/description.xml`. The last IP used is kept in activity preferences (`last_tv_ip`).
 
-**Wi-Fi binding:** `WifiRoute` binds the whole process to the Wi-Fi network (`bindProcessToNetwork`). The car's casting hotspot has no internet, so once Android sends internet traffic over 4G, unbound requests to the car would follow it there and fail. The app never needs the internet itself.
+**Wi-Fi binding:** `WifiRoute` requests the Wi-Fi network (`requestNetwork`, so Android keeps a no-internet hotspot connected) and binds the whole process to it (`bindProcessToNetwork`). The car's casting hotspot has no internet, so once Android sends internet traffic over 4G, unbound requests to the car would follow it there and fail. The app never needs the internet itself.
 
 **Controlling it:** `DlnaController` is a single-threaded SOAP client for AVTransport.
 - `describe()` parses the description with regexes and resolves `controlURL` against `URLBase` or the description URL, the way a browser would. It also stores alternate URL forms. On HTTP 404, `soap()` tries those alternates and remembers the one that works. Any other error stops the retries, because it means the renderer answered.
