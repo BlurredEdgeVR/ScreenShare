@@ -31,20 +31,29 @@ class MainActivity : Activity() {
     private var carDeadline = 0L
     private var wifiWaitUntil = 0L
     private val handler = android.os.Handler(android.os.Looper.getMainLooper())
-    private lateinit var carButton: Button
-    private lateinit var carWifiButton: Button
-
     private var endpoints: RendererEndpoints? = null
+    private lateinit var statusTitle: TextView
     private lateinit var statusView: TextView
-    private lateinit var deviceButton: Button
-    private lateinit var pickButton: Button
-    private lateinit var controlsRow: LinearLayout
     private lateinit var spinner: ProgressBar
+    private lateinit var changeButton: Button
+    private lateinit var searchActions: LinearLayout
+    private lateinit var carButton: Button
     private lateinit var mirrorButton: Button
-    private lateinit var qualityButton: Button
-    private lateinit var soundButton: Button
-    private lateinit var urlButton: Button
-    private lateinit var rootLayout: LinearLayout
+    private lateinit var wazeButton: Button
+    private lateinit var stopMirrorButton: Button
+    private lateinit var controlsRow: LinearLayout
+    private lateinit var qualityRow: Row
+    private lateinit var soundRow: Row
+    private lateinit var carWifiRow: Row
+    private lateinit var castFileRow: Row
+    private lateinit var castLinkRow: Row
+    /** No display is connected and the search is over: offer Search again and Enter IP. */
+    private var notFound = false
+    /** The device picker is open. */
+    private var awaitingPick = false
+    /** A video file or link is playing on the display (not mirroring). */
+    private var castingVideo = false
+    private var castStatus = ""
 
     @SuppressLint("SetTextI18n")
     private var multicastLock: android.net.wifi.WifiManager.MulticastLock? = null
@@ -80,210 +89,172 @@ class MainActivity : Activity() {
                 acquire()
             }
         } catch (_: Exception) { }
-        val pad = (resources.displayMetrics.density * 24).toInt()
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER_HORIZONTAL
-            setPadding(pad, pad * 2, pad, pad)
-            setBackgroundResource(0)  // replaced below with gradient drawable via background layer
-            setBackgroundColor(0xFF241432.toInt())
-        }
-
-        val title = TextView(this).apply {
-            text = "Screen	Share"
-            textSize = 30f
-            setTextColor(0xFFFFFFFF.toInt())
-        }
-        // two-tone title: Screen white + Share amber
-        title.text = ""
-        val titleRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-        }
-        titleRow.addView(TextView(this).apply { text = "Screen"; textSize = 30f; setTextColor(0xFFFFFFFF.toInt()) })
-        titleRow.addView(TextView(this).apply { text = "Share"; textSize = 30f; setTextColor(0xFFFFC53D.toInt()) })
-
-        val deviceSection = TextView(this).apply {
-            text = "── Display ──"
-            textSize = 13f
-            gravity = Gravity.CENTER
-            setTextColor(0xFF9E7FA8.toInt())
-            setPadding(0, (pad*1.2f).toInt(), 0, (pad*0.4f).toInt())
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-        }
-
-        statusView = TextView(this).apply {
-            text = "Searching for displays…"
-            textSize = 16f
-            setTextColor(0xFFFFC9A8.toInt())
-            gravity = Gravity.CENTER
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-        }
-
-        spinner = ProgressBar(this).apply {
-            visibility = View.VISIBLE
-        }
-
-        deviceButton = Button(this).apply {
-            text = "Choose display"
-            visibility = View.GONE
-        }
-        carButton = Button(this).apply {
-            text = "Car mode: mirror and open Waze"
-            visibility = View.GONE
-            setOnClickListener { carMode = true; carModeStarted = true; startMirrorFlow() }
-        }
-        pickButton = Button(this).apply {
-            text = "Choose a video to cast"
-            visibility = View.GONE
-        }
-        mirrorButton = Button(this).apply {
-            text = "Screen mirror (whole phone screen)"
-            visibility = View.GONE
-            setOnClickListener { startMirrorFlow() }
-        }
-        qualityButton = Button(this).apply {
-            visibility = View.GONE
-            setOnClickListener { chooseQuality() }
-        }
-        updateQualityButton()
-        soundButton = Button(this).apply {
-            visibility = View.GONE
-            setOnClickListener { toggleSound() }
-        }
-        updateSoundButton()
-        urlButton = Button(this).apply {
-            text = "Cast an online video link"
-            visibility = View.GONE
-            setOnClickListener {
-                val input = android.widget.EditText(this@MainActivity).apply {
-                    hint = "Paste a direct video link (http…mp4 etc)"
-                    inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_URI
-                }
-                android.app.AlertDialog.Builder(this@MainActivity)
-                    .setTitle("Cast online video")
-                    .setView(input)
-                    .setPositiveButton("Cast") { _, _ ->
-                        val u = input.text.toString().trim()
-                        if (u.startsWith("http")) {
-                            val e = endpoints ?: return@setPositiveButton
-                            statusView.text = "Casting…"
-                            DlnaController.takeErrorLog()
-                            DlnaController.setUriAndPlay(e, u, "Online video") { ok ->
-                                runOnUiThread {
-                                    if (ok) { statusView.text = "Playing link on display"; controlsRow.visibility = View.VISIBLE }
-                                    else showReport("Cast failed: link not playable or refused", DlnaController.takeErrorLog().ifBlank { DlnaController.lastError } + "\n\n" + DlnaController.info)
-                                }
-                            }
-                        } else toast("Enter a link starting with http")
-                    }
-                    .setNegativeButton("Cancel", null)
-                    .show()
-            }
-        }
-        controlsRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER
-            visibility = View.GONE
-            val b1 = Button(this@MainActivity).apply { text = "Pause" }
-            val b2 = Button(this@MainActivity).apply { text = "Stop" }
-            val b3 = Button(this@MainActivity).apply { text = "-30s" }
-            val b4 = Button(this@MainActivity).apply { text = "+30s" }
-            b3.setOnClickListener {
-                endpoints?.let { e -> DlnaController.getPosition(e) { pos ->
-                    val now = pos?.first ?: 0
-                    DlnaController.seekTo(e, (now - 30).coerceAtLeast(0)) { ok -> toast(if (ok) "Skipped back" else "Seek failed") }
-                } }
-            }
-            b4.setOnClickListener {
-                endpoints?.let { e -> DlnaController.getPosition(e) { pos ->
-                    val now = pos?.first ?: 0
-                    DlnaController.seekTo(e, now + 30) { ok -> toast(if (ok) "Skipped forward" else "Seek failed") }
-                } }
-            }
-            b1.setOnClickListener { endpoints?.let { e -> DlnaController.pause(e) { ok -> toast(if (ok) "Paused" else "Pause failed") } } }
-            b2.setOnClickListener {
-                endpoints?.let { e -> DlnaController.stop(e) { ok -> toast(if (ok) "Stopped" else "Stop failed") } }
-                if (MirrorService.isRunning) {
-                    startService(Intent(this@MainActivity, MirrorService::class.java).apply { action = MirrorService.ACTION_STOP })
-                    statusView.text = "Mirroring stopped\nChoose what to cast"
-                }
-            }
-            addView(b1); addView(b2); addView(b3); addView(b4)
-        }
-
-        root.addView(titleRow)
-        val slogan = TextView(this).apply {
-            text = "share your screens"
-            textSize = 13f
-            setTextColor(0xB3FFE9D6.toInt())   // warm white 70%
-            setPadding(0, (pad*0.2f).toInt(), 0, 0)
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-            gravity = Gravity.CENTER
-        }
-        root.addView(slogan)
-        root.addView(spinner, ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-        root.addView(deviceSection)
-        root.addView(statusView)
-        root.addView(deviceButton)
-        val contentSection = TextView(this).apply {
-            text = "── What to cast ──"
-            textSize = 13f
-            gravity = Gravity.CENTER
-            setTextColor(0xFF9E7FA8.toInt())
-            setPadding(0, (pad*1.2f).toInt(), 0, (pad*0.4f).toInt())
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-        }
-        root.addView(contentSection)
-        root.addView(carButton)
-        root.addView(pickButton)
-        root.addView(mirrorButton)
-        root.addView(qualityButton)
-        root.addView(soundButton)
-        root.addView(urlButton)
-        val ctlSection = TextView(this).apply {
-            text = "── Controls ──"
-            textSize = 13f
-            gravity = Gravity.CENTER
-            setTextColor(0xFF9E7FA8.toInt())
-            setPadding(0, (pad*1.2f).toInt(), 0, (pad*0.4f).toInt())
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-        }
-        root.addView(ctlSection)
-        root.addView(controlsRow)
-        root.addView(Button(this).apply {
-            text = "Add Car mode to home screen"
-            setOnClickListener { pinCarModeShortcut() }
-        })
-        carWifiButton = Button(this).apply { setOnClickListener { chooseCarWifi() } }
-        updateCarWifiButton()
-        root.addView(carWifiButton)
-        root.addView(Button(this).apply {
-            text = "Connection log"
-            setOnClickListener { showLog() }
-        })
-        rootLayout = root
-        // Scrolls, so the controls stay reachable when the phone is sideways in a car mount.
-        setContentView(android.widget.ScrollView(this).apply {
-            isFillViewport = true
-            setBackgroundColor(0xFF241432.toInt())
-            addView(root)
-        })
-
-        deviceButton.setOnClickListener { showDevicePicker() }
-        pickButton.setOnClickListener { pickVideo() }
+        buildScreen()
         carMode = intent?.action == ACTION_CAR_MODE
         EventLog.add(if (carMode) "Car mode started" else "App opened")
         if (carMode) carDeadline = System.currentTimeMillis() + CAR_WAIT_MS
         if (carMode && MirrorService.isRunning) openWaze()
         if (savedDevice() != null) connectSaved() else startSearch()
+    }
+
+    /**
+     * One column: the display status, the main actions for the current state, then Settings and
+     * More as grouped lists. [refreshUi] decides what shows.
+     */
+    private fun buildScreen() {
+        window.statusBarColor = Palette.BG
+        window.navigationBarColor = Palette.BG
+        val match = ViewGroup.LayoutParams.MATCH_PARENT
+        val wrap = ViewGroup.LayoutParams.WRAP_CONTENT
+        val medium = android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL)
+        val column = Column(this, dp(560)).apply { setPadding(dp(16), dp(16), dp(16), dp(32)) }
+
+        column.addView(LinearLayout(this).apply {
+            setPadding(dp(4), dp(8), 0, dp(16))
+            addView(TextView(this@MainActivity).apply { text = "Screen"; textSize = 26f; setTextColor(Palette.TEXT) })
+            addView(TextView(this@MainActivity).apply { text = "Share"; textSize = 26f; setTextColor(Palette.ACCENT) })
+        })
+
+        statusTitle = TextView(this).apply { textSize = 18f; typeface = medium; setTextColor(Palette.TEXT) }
+        spinner = ProgressBar(this, null, android.R.attr.progressBarStyleSmall).apply {
+            indeterminateTintList = android.content.res.ColorStateList.valueOf(Palette.ACCENT)
+        }
+        statusView = TextView(this).apply {
+            textSize = 14f
+            setTextColor(Palette.MUTED)
+            setPadding(0, dp(4), dp(8), dp(8))
+        }
+        changeButton = actionButton("Change display", ButtonStyle.TEXT) { chooseDisplay() }
+        searchActions = LinearLayout(this).apply {
+            addView(actionButton("Search again", ButtonStyle.TEXT) { searchAgain() })
+            addView(actionButton("Enter IP", ButtonStyle.TEXT) { enterIpManually() })
+        }
+        column.addView(panel().apply {
+            addView(LinearLayout(this@MainActivity).apply {
+                gravity = Gravity.CENTER_VERTICAL
+                addView(statusTitle, LinearLayout.LayoutParams(0, wrap, 1f))
+                addView(spinner, LinearLayout.LayoutParams(dp(20), dp(20)).apply { marginEnd = dp(8) })
+            })
+            addView(statusView)
+            // Text buttons carry their own padding; pull them left so their labels line up.
+            addView(changeButton, LinearLayout.LayoutParams(wrap, wrap).apply { marginStart = -dp(12) })
+            addView(searchActions, LinearLayout.LayoutParams(wrap, wrap).apply { marginStart = -dp(12) })
+        }, LinearLayout.LayoutParams(match, wrap))
+
+        fun gap(top: Int) = LinearLayout.LayoutParams(match, wrap).apply { topMargin = dp(top) }
+        carButton = actionButton("Mirror and open Waze", ButtonStyle.PRIMARY) {
+            carMode = true; carModeStarted = true; startMirrorFlow()
+        }
+        mirrorButton = actionButton("Mirror only", ButtonStyle.SECONDARY) { startMirrorFlow() }
+        wazeButton = actionButton("Open Waze", ButtonStyle.PRIMARY) { openWaze() }
+        stopMirrorButton = actionButton("Stop mirroring", ButtonStyle.SECONDARY) { stopMirroring() }
+        column.addView(carButton, gap(16))
+        column.addView(mirrorButton, gap(8))
+        column.addView(wazeButton, gap(16))
+        column.addView(stopMirrorButton, gap(8))
+
+        controlsRow = LinearLayout(this).apply {
+            val controls = listOf<Pair<String, () -> Unit>>(
+                "Pause" to { endpoints?.let { e -> DlnaController.pause(e) { ok -> toast(if (ok) "Paused" else "Pause failed") } } },
+                "−30 s" to { seekBy(-30) },
+                "+30 s" to { seekBy(30) },
+                "Stop" to { stopVideo() },
+            )
+            controls.forEachIndexed { i, (label, action) ->
+                addView(actionButton(label, ButtonStyle.SECONDARY, action),
+                    LinearLayout.LayoutParams(0, wrap, 1f).apply { if (i > 0) marginStart = dp(8) })
+            }
+        }
+        column.addView(controlsRow, gap(16))
+
+        column.addView(sectionLabel("Settings"))
+        qualityRow = listRow("Mirror quality") { chooseQuality() }
+        soundRow = listRow("Phone sound to car", withSwitch = true) { toggleSound() }
+        carWifiRow = listRow("Keep 4G internet in the car") { chooseCarWifi() }
+        column.addView(listGroup(qualityRow.view, soundRow.view, carWifiRow.view))
+
+        column.addView(sectionLabel("More"))
+        castFileRow = listRow("Cast a video from the phone") { pickVideo() }
+        castLinkRow = listRow("Cast a video link") { castLink() }
+        column.addView(listGroup(castFileRow.view, castLinkRow.view,
+            listRow("Add Car mode to home screen") { pinCarModeShortcut() }.view,
+            listRow("Connection log") { showLog() }.view))
+
+        setContentView(android.widget.ScrollView(this).apply {
+            isFillViewport = true
+            setBackgroundColor(Palette.BG)
+            addView(android.widget.FrameLayout(this@MainActivity).apply {
+                addView(column, android.widget.FrameLayout.LayoutParams(match, wrap, Gravity.CENTER_HORIZONTAL))
+            })
+        })
+        refreshUi()
+    }
+
+    /** Shows what fits the current state: searching, connected, mirroring or playing a video. */
+    private fun refreshUi() {
+        val e = endpoints
+        val mirroring = MirrorService.isRunning
+        statusTitle.text = e?.friendlyName?.ifBlank { "Display" } ?: "Not connected"
+        if (e != null) statusView.text = when {
+            mirroring -> "Mirroring"
+            castingVideo -> castStatus
+            else -> "Connected"
+        }
+        spinner.shown = e == null && !notFound && !awaitingPick
+        searchActions.shown = e == null && notFound
+        changeButton.shown = e != null && !mirroring
+        carButton.shown = e != null && !mirroring
+        mirrorButton.shown = e != null && !mirroring
+        wazeButton.shown = mirroring
+        stopMirrorButton.shown = mirroring
+        controlsRow.shown = e != null && castingVideo && !mirroring
+        castFileRow.view.shown = e != null
+        castLinkRow.view.shown = e != null
+        qualityRow.value.text = mirrorQuality().title
+        soundRow.switch?.isChecked = soundOn()
+        carWifiRow.value.text = if (WifiRoute.joinsCarWifi) "On" else "Off"
+    }
+
+    private fun stopMirroring() {
+        endpoints?.let { e -> DlnaController.stop(e) { } }
+        startService(Intent(this, MirrorService::class.java).apply { action = MirrorService.ACTION_STOP })
+        handler.postDelayed({ if (alive()) refreshUi() }, 500)
+    }
+
+    private fun stopVideo() {
+        endpoints?.let { e -> DlnaController.stop(e) { ok -> toast(if (ok) "Stopped" else "Stop failed") } }
+        castingVideo = false
+        refreshUi()
+    }
+
+    private fun seekBy(seconds: Int) {
+        val e = endpoints ?: return
+        DlnaController.getPosition(e) { pos ->
+            val now = pos?.first ?: 0
+            DlnaController.seekTo(e, (now + seconds).coerceAtLeast(0)) { ok ->
+                toast(if (!ok) "Seek failed" else if (seconds < 0) "Skipped back" else "Skipped forward")
+            }
+        }
+    }
+
+    private fun searchAgain() {
+        notFound = false
+        WifiRoute.ensure(userAction = true)
+        startSearch()
+    }
+
+    /** Searches afresh and lets the user pick, even if only one display answers. */
+    @SuppressLint("SetTextI18n")
+    private fun chooseDisplay() {
+        statusView.text = "Searching for displays…"
+        spinner.shown = true
+        findDisplays { devices ->
+            runOnUiThread {
+                if (!alive()) return@runOnUiThread
+                refreshUi()
+                if (devices.isEmpty()) toast("No display found") else showDevicePicker(devices)
+            }
+        }
     }
 
     private fun alive() = !isFinishing && !isDestroyed
@@ -312,7 +283,7 @@ class MainActivity : Activity() {
         val saved = savedDevice() ?: return startSearch()
         if (carMode) WifiRoute.ensure(userAction = false)
         if (waitForCarWifi { connectSaved() }) return
-        statusView.text = "Connecting: ${saved.friendlyName.ifBlank { saved.ip }}…"
+        statusView.text = "Connecting to ${saved.friendlyName.ifBlank { saved.ip }}…"
         DlnaController.describe(saved.descriptionUrl) { ep ->
             runOnUiThread {
                 if (!alive()) return@runOnUiThread
@@ -356,7 +327,8 @@ class MainActivity : Activity() {
         if (wifiWaitUntil == 0L) wifiWaitUntil = now + WIFI_WAIT_MS
         if (now > maxOf(wifiWaitUntil, carDeadline)) { wifiWaitUntil = 0; return false }
         statusView.text = "Joining the car's Wi-Fi (${WifiRoute.carWifiName})…"
-        spinner.visibility = View.VISIBLE
+        notFound = false
+        refreshUi()
         handler.postDelayed({ if (alive()) then() }, 1000)
         return true
     }
@@ -388,32 +360,34 @@ class MainActivity : Activity() {
         }
     }
 
-    /** The saved display among [found]: by name, or, with no name saved, by address or as the only one. */
-    private fun pickSaved(found: List<CastDevice>, saved: CastDevice): CastDevice? =
-        if (saved.friendlyName.isNotBlank()) found.firstOrNull { it.friendlyName == saved.friendlyName }
-        else found.firstOrNull { it.descriptionUrl == saved.descriptionUrl } ?: found.singleOrNull()
+    /**
+     * The saved display among [found]: by name; with no name saved, by its address ignoring the
+     * port (the car's displays get a new port each time it starts), or as the only one found.
+     */
+    private fun pickSaved(found: List<CastDevice>, saved: CastDevice): CastDevice? {
+        if (saved.friendlyName.isNotBlank()) return found.firstOrNull { it.friendlyName == saved.friendlyName }
+        fun place(url: String) = try { java.net.URL(url).let { it.host + it.path } } catch (_: Exception) { url }
+        return found.firstOrNull { place(it.descriptionUrl) == place(saved.descriptionUrl) } ?: found.singleOrNull()
+    }
 
     @SuppressLint("SetTextI18n")
-    private fun noDisplayFound() {
-        spinner.visibility = View.GONE
-        statusView.text = "No display found\n\nCheck the phone is on the car's Wi-Fi and search again, or enter the display's IP"
-        addRefreshButton()
-        addManualEntryButton()
+    private fun noDisplayFound(message: String = "No display found. Check the phone is on the car's Wi-Fi.") {
+        notFound = true
+        awaitingPick = false
+        statusView.text = message
+        refreshUi()
     }
 
     @SuppressLint("SetTextI18n")
     private fun startSearch() {
         if (!alive()) return
+        notFound = false
         if (waitForCarWifi { startSearch() }) return
         statusView.text = "Searching for displays…"
-        spinner.visibility = View.VISIBLE
-        deviceButton.visibility = View.GONE
-        pickButton.visibility = View.GONE
-        controlsRow.visibility = View.GONE
+        refreshUi()
         findDisplays { devices ->
             runOnUiThread {
                 if (!alive()) return@runOnUiThread
-                spinner.visibility = View.GONE
                 val match = savedDevice()?.let { pickSaved(devices, it) }
                 when {
                     match != null -> connect(match)
@@ -424,83 +398,48 @@ class MainActivity : Activity() {
         }
     }
 
-    private var refreshButton: Button? = null
-    private var manualButton: Button? = null
-
-    private fun addRefreshButton() {
-        if (refreshButton == null) {
-            refreshButton = Button(this).apply {
-                text = "Search again"
-                setOnClickListener {
-                    removeView(this); removeManual()
-                    WifiRoute.ensure(userAction = true)
-                    startSearch()
-                }
-            }
-            rootLayout.addView(refreshButton)
+    private fun enterIpManually() {
+        val input = android.widget.EditText(this).apply {
+            hint = "Display IP, for example 192.168.0.109"
+            inputType = android.text.InputType.TYPE_CLASS_PHONE
         }
-    }
-
-    private fun addManualEntryButton() {
-        if (manualButton == null) {
-            manualButton = Button(this).apply {
-                text = "Enter display IP manually"
-                setOnClickListener {
-                    val input = android.widget.EditText(this@MainActivity).apply {
-                        hint = "Display IP, e.g. 192.168.0.109"
-                        inputType = android.text.InputType.TYPE_CLASS_PHONE
-                    }
-                    android.app.AlertDialog.Builder(this@MainActivity)
-                        .setTitle("Manual connect")
-                        .setView(input)
-                        .setPositiveButton("Connect") { _, _ ->
-                            val ip = input.text.toString().trim()
-                            if (ip.isNotEmpty()) {
-                                connect(CastDevice("", "http://$ip:49152/description.xml", ip))
-                            }
-                        }
-                        .setNegativeButton("Cancel", null)
-                        .show()
-                }
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Enter the display's IP")
+            .setView(input)
+            .setPositiveButton("Connect") { _, _ ->
+                val ip = input.text.toString().trim()
+                if (ip.isNotEmpty()) connect(CastDevice("", "http://$ip:49152/description.xml", ip))
             }
-            rootLayout.addView(manualButton)
-        }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
-
-    private fun removeManual() {
-        manualButton?.let { rootLayout.removeView(it) }
-        manualButton = null
-    }
-
-    private fun removeView(v: View) {
-        rootLayout.removeView(v)
-        refreshButton = null
-    }
-
-    private var pendingDevices: List<CastDevice> = emptyList()
 
     private fun chooseFrom(devices: List<CastDevice>) {
-        pendingDevices = devices
-        if (devices.size == 1) {
-            connect(devices[0])
-        } else {
-            statusView.text = "Found ${devices.size} device(s), tap to choose"
-            deviceButton.visibility = View.VISIBLE
-            deviceButton.text = "Choose display (${devices.size})"
-        }
+        if (devices.size == 1) connect(devices[0]) else showDevicePicker(devices)
     }
 
-    private fun showDevicePicker() {
-        val names = pendingDevices.map { it.ip + (if (it.friendlyName.isNotBlank()) " · ${it.friendlyName}" else "") }
+    @SuppressLint("SetTextI18n")
+    private fun showDevicePicker(devices: List<CastDevice>) {
+        val names = devices.map { it.friendlyName.ifBlank { it.ip } }
+        awaitingPick = true
+        if (endpoints == null) statusView.text = "Pick a display to connect to."
+        refreshUi()
         android.app.AlertDialog.Builder(this)
             .setTitle("Choose display")
-            .setItems(names.toTypedArray()) { _, which -> connect(pendingDevices[which]) }
+            .setItems(names.toTypedArray()) { _, which -> awaitingPick = false; connect(devices[which]) }
+            .setNeutralButton("Enter IP") { _, _ -> awaitingPick = false; enterIpManually() }
+            .setOnCancelListener {
+                awaitingPick = false
+                if (endpoints == null) noDisplayFound("Pick a display to connect to.") else refreshUi()
+            }
             .show()
     }
 
     @SuppressLint("SetTextI18n")
     private fun connect(device: CastDevice) {
-        statusView.text = "Connecting: ${device.friendlyName.ifBlank { device.ip }}…"
+        if (endpoints == null) statusView.text = "Connecting to ${device.friendlyName.ifBlank { device.ip }}…"
+        notFound = false
+        refreshUi()
         DlnaController.describe(device.descriptionUrl) { ep ->
             runOnUiThread {
                 if (!alive()) return@runOnUiThread
@@ -511,8 +450,8 @@ class MainActivity : Activity() {
                     handler.postDelayed({ connectSaved() }, 3000)
                     return@runOnUiThread
                 }
-                statusView.text = "Connection failed, tap to search again"
-                addRefreshButton()
+                val name = device.friendlyName.ifBlank { device.ip }
+                if (endpoints == null) noDisplayFound("Couldn't connect to $name.") else toast("Couldn't connect to $name")
             }
         }
     }
@@ -520,28 +459,17 @@ class MainActivity : Activity() {
     @SuppressLint("SetTextI18n")
     private fun connected(device: CastDevice, ep: RendererEndpoints) {
         EventLog.add("Connected to ${ep.friendlyName} at ${device.descriptionUrl}")
+        if (endpoints?.avTransportControlUrl != ep.avTransportControlUrl) castingVideo = false
         endpoints = ep
-        spinner.visibility = View.GONE
+        notFound = false
+        awaitingPick = false
         getPreferences(MODE_PRIVATE).edit()
             .putString("last_tv_ip", device.ip)
             .putString("last_tv_desc", device.descriptionUrl)
             .putString("last_tv_name", ep.friendlyName)
             .apply()
-        deviceButton.text = "Connected: ${ep.friendlyName}"
-        deviceButton.visibility = View.VISIBLE
-        statusView.text = "Choose a video on your phone to cast"
-        pickButton.visibility = View.VISIBLE
-        mirrorButton.visibility = View.VISIBLE
-        qualityButton.visibility = View.VISIBLE
-        soundButton.visibility = View.VISIBLE
-        urlButton.visibility = View.VISIBLE
-        carButton.visibility = View.VISIBLE
-        refreshButton?.let { removeView(it) }
-        removeManual()
-        if (MirrorService.isRunning) {
-            statusView.text = "Mirroring to ${ep.friendlyName}"
-            controlsRow.visibility = View.VISIBLE
-        } else if (carMode && !carModeStarted) {
+        refreshUi()
+        if (!MirrorService.isRunning && carMode && !carModeStarted) {
             carModeStarted = true
             statusView.text = "Car mode: starting…"
             startMirrorFlow()
@@ -588,14 +516,14 @@ class MainActivity : Activity() {
             val ip = MirrorServer.localIp() ?: run { toast("Could not get phone IP"); return@postDelayed }
             val token = MirrorServer.streamToken
             if (token.isEmpty()) { toast("Mirror service not ready"); return@postDelayed }
-            statusView.text = "Mirroring: $ip:8080/live.ts"
+            statusView.text = "Starting the mirror…"
             DlnaController.takeErrorLog()
             DlnaController.playLiveStream(e, "http://$ip:8080/live.ts?k=$token", "Screen mirror") { ok ->
                 runOnUiThread {
                     if (ok) {
                         EventLog.add("Mirroring to ${e.friendlyName} (${mirrorQuality().title}, stream at $ip)")
-                        statusView.text = "Mirroring phone screen to display"
-                        controlsRow.visibility = View.VISIBLE
+                        castingVideo = false
+                        refreshUi()
                         if (carMode) openWaze()
                     } else {
                         val why = DlnaController.takeErrorLog().ifBlank { DlnaController.lastError }
@@ -610,10 +538,6 @@ class MainActivity : Activity() {
     private fun mirrorQuality(): MirrorQuality =
         MirrorQuality.fromName(getPreferences(MODE_PRIVATE).getString("mirror_quality", null))
 
-    private fun updateQualityButton() {
-        qualityButton.text = "Mirror quality: ${mirrorQuality().title}"
-    }
-
     private fun chooseQuality() {
         val all = MirrorQuality.entries
         val items = all.map { "${it.title}\n${it.detail}" }.toTypedArray()
@@ -621,7 +545,7 @@ class MainActivity : Activity() {
             .setTitle("Mirror quality")
             .setSingleChoiceItems(items, all.indexOf(mirrorQuality())) { dialog, which ->
                 getPreferences(MODE_PRIVATE).edit().putString("mirror_quality", all[which].name).apply()
-                updateQualityButton()
+                refreshUi()
                 dialog.dismiss()
                 if (MirrorService.isRunning) toast("Applies next time you start mirroring")
             }
@@ -631,13 +555,9 @@ class MainActivity : Activity() {
 
     private fun soundOn(): Boolean = getPreferences(MODE_PRIVATE).getBoolean("send_sound", false)
 
-    private fun updateSoundButton() {
-        soundButton.text = "Phone sound to car: ${if (soundOn()) "On" else "Off"}"
-    }
-
     private fun setSound(on: Boolean) {
         getPreferences(MODE_PRIVATE).edit().putBoolean("send_sound", on).apply()
-        updateSoundButton()
+        refreshUi()
         if (on) toast("Music and video sound will play through the car with the picture. Waze's voice still uses Bluetooth.")
         if (MirrorService.isRunning) toast("Applies next time you start mirroring")
     }
@@ -703,8 +623,9 @@ class MainActivity : Activity() {
             DlnaController.setUriAndPlay(e, url, name) { ok ->
                 runOnUiThread {
                     if (ok) {
-                        statusView.text = "Playing on display: $name"
-                        controlsRow.visibility = View.VISIBLE
+                        castingVideo = true
+                        castStatus = "Playing $name"
+                        refreshUi()
                     } else {
                         statusView.text = "Cast failed: display refused the request"
                         showReport("Cast failed: display refused the request", DlnaController.takeErrorLog().ifBlank { DlnaController.lastError } + "\n\n" + DlnaController.info)
@@ -734,16 +655,37 @@ class MainActivity : Activity() {
             endpoints != null && !carModeStarted -> { carModeStarted = true; startMirrorFlow() }
             // Not connected and not already retrying in car mode: start looking.
             endpoints == null && !wasCarMode -> {
-                refreshButton?.let { removeView(it) }
-                removeManual()
+                notFound = false
                 WifiRoute.ensure(userAction = true)
                 connectSaved()
             }
         }
     }
 
-    private fun updateCarWifiButton() {
-        carWifiButton.text = "Keep 4G internet in the car: ${if (WifiRoute.joinsCarWifi) "On" else "Off"}"
+    private fun castLink() {
+        val input = android.widget.EditText(this).apply {
+            hint = "A direct video link (http…mp4)"
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_URI
+        }
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Cast a video link")
+            .setView(input)
+            .setPositiveButton("Cast") { _, _ ->
+                val link = input.text.toString().trim()
+                val e = endpoints ?: return@setPositiveButton
+                if (!link.startsWith("http")) { toast("Enter a link starting with http"); return@setPositiveButton }
+                statusView.text = "Casting…"
+                DlnaController.takeErrorLog()
+                DlnaController.setUriAndPlay(e, link, "Online video") { ok ->
+                    runOnUiThread {
+                        if (ok) { castingVideo = true; castStatus = "Playing the link"; refreshUi() }
+                        else showReport("Cast failed: link not playable or refused",
+                            DlnaController.takeErrorLog().ifBlank { DlnaController.lastError } + "\n\n" + DlnaController.info)
+                    }
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 
     /**
@@ -757,24 +699,22 @@ class MainActivity : Activity() {
         val pad = (resources.displayMetrics.density * 20).toInt()
         val on = WifiRoute.joinsCarWifi
         val info = TextView(this).apply {
-            text = "The app joins the car's Wi-Fi itself, as a link to the car only. Android then " +
-                "doesn't use that Wi-Fi for internet, so Waze and Tidal keep using mobile data.\n\n" +
-                "After turning this on, forget the car's Wi-Fi in the phone's Wi-Fi settings, so the " +
-                "phone doesn't also join it the usual way. The first time, Android asks you to allow " +
-                "the connection: pick the car's Wi-Fi and tap Connect."
+            text = "The app connects to the car's Wi-Fi itself, so Android keeps using mobile data " +
+                "for internet.\n\nAfterwards, forget the car's Wi-Fi in Wi-Fi settings. The first " +
+                "time in the car, Android asks to allow the connection: pick the car's Wi-Fi and tap Connect."
             setPadding(0, 0, 0, pad / 2)
         }
         val ssidInput = android.widget.EditText(this).apply {
             hint = "Car Wi-Fi name"
             setSingleLine(true)
-            setText(WifiRoute.carWifiName ?: "Zeekr-2882_Casting")
+            setText(WifiRoute.savedCarWifiName ?: "Zeekr-2882_Casting")
         }
         val passInput = android.widget.EditText(this).apply {
             hint = "Car Wi-Fi password"
             setSingleLine(true)
             inputType = android.text.InputType.TYPE_CLASS_TEXT or
                 android.text.InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
-            setText(WifiRoute.carWifiPassword)
+            setText(WifiRoute.savedCarWifiPassword)
         }
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -792,15 +732,15 @@ class MainActivity : Activity() {
                     pass.isNotEmpty() && pass.length !in 8..63 -> toast("Wi-Fi passwords are 8 to 63 characters")
                     else -> {
                         WifiRoute.setCarWifi(this, ssid, pass)
-                        updateCarWifiButton()
+                        refreshUi()
                         if (!on) offerWifiSettings(ssid)
                     }
                 }
             }
             .setNegativeButton("Cancel", null)
         if (on) dialog.setNeutralButton("Turn off") { _, _ ->
-            WifiRoute.setCarWifi(this, null, "")
-            updateCarWifiButton()
+            WifiRoute.stopJoiningCarWifi(this)
+            refreshUi()
             toast("Join the car's Wi-Fi in the phone's Wi-Fi settings again")
         }
         dialog.show()
@@ -871,6 +811,8 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        // Mirroring may have been stopped from the notification while the app was away.
+        if (::statusTitle.isInitialized) refreshUi()
         showCrashIfAny()
     }
 

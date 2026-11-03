@@ -39,7 +39,10 @@ object WifiRoute {
     @Volatile private var callback: ConnectivityManager.NetworkCallback? = null
     private var defaultCallback: ConnectivityManager.NetworkCallback? = null
     private var cm: ConnectivityManager? = null
+    /** The car Wi-Fi the app joins, or null when the phone joins it. */
     @Volatile private var carSsid: String? = null
+    /** Saved even while off, so turning it back on needs no retyping. */
+    private var savedSsid: String? = null
     private var carPass = ""
     private var lastRequestMs = 0L
     /** Ask again on our own only after the car's Wi-Fi was joined and then lost, not after a refusal. */
@@ -52,7 +55,9 @@ object WifiRoute {
     /** The car Wi-Fi name the app joins, if it does. */
     val carWifiName: String? get() = carSsid
 
-    val carWifiPassword: String get() = carPass
+    /** The saved car Wi-Fi name and password, kept while the option is off. */
+    val savedCarWifiName: String? get() = savedSsid
+    val savedCarWifiPassword: String get() = carPass
 
     /** True while the app is asking for the car's Wi-Fi and hasn't joined it yet. */
     val joiningCarWifi: Boolean get() = carSsid != null && callback != null && current == null
@@ -64,8 +69,9 @@ object WifiRoute {
             val c = app.getSystemService(ConnectivityManager::class.java) ?: return
             cm = c
             val p = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            if (Build.VERSION.SDK_INT >= 29) carSsid = p.getString("ssid", null)?.takeIf { it.isNotBlank() }
+            savedSsid = p.getString("ssid", null)?.takeIf { it.isNotBlank() }
             carPass = p.getString("pass", "") ?: ""
+            if (Build.VERSION.SDK_INT >= 29 && p.getBoolean("on", true)) carSsid = savedSsid
             watchInternet(c)
         }
         ensure(userAction = true)
@@ -97,18 +103,30 @@ object WifiRoute {
         autoRetry = false
     }
 
-    /** Switches between the two modes. [ssid] null means the phone joins the car's Wi-Fi itself. */
+    /** The app joins [ssid] itself from now on. */
     @Synchronized
-    fun setCarWifi(context: Context, ssid: String?, pass: String) {
-        if (ssid != null && Build.VERSION.SDK_INT < 29) return
-        context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().apply {
-            if (ssid == null) clear() else putString("ssid", ssid).putString("pass", pass)
-        }.apply()
+    fun setCarWifi(context: Context, ssid: String, pass: String) {
+        if (Build.VERSION.SDK_INT < 29) return
+        context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putString("ssid", ssid).putString("pass", pass).putBoolean("on", true).apply()
+        savedSsid = ssid
+        carPass = pass
+        switchTo(ssid)
+    }
+
+    /** The phone joins the car's Wi-Fi itself again. The name and password stay saved. */
+    @Synchronized
+    fun stopJoiningCarWifi(context: Context) {
+        context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putBoolean("on", false).apply()
+        switchTo(null)
+    }
+
+    private fun switchTo(ssid: String?) {
         callback?.let { try { cm?.unregisterNetworkCallback(it) } catch (_: Exception) {} }
         callback = null
         current = null
         carSsid = ssid
-        carPass = pass
         EventLog.add(if (ssid == null) "Car Wi-Fi: the phone joins it" else "Car Wi-Fi: the app joins \"$ssid\"")
         ensure(userAction = true)
     }
