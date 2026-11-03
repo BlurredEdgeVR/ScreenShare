@@ -61,6 +61,12 @@ to act like a slow car.
   - No internet: the phone stayed on the casting Wi-Fi for internet. `network_avoid_bad_wifi` was 0, and Android had once seen the casting network validate, so it stuck with it. That setting is now 1 (set over adb).
   - No music over Bluetooth: A2DP stayed connected to the car the whole time, so either Tidal couldn't stream (no internet) or the car mutes Bluetooth while casting. To be confirmed on the next drive.
 - Fixes: `WifiRoute` keeps the app's car traffic on Wi-Fi while 4G carries the internet. There is also an optional "Phone sound to car" switch that sends media audio inside the cast stream.
+- **Sound test (2 Nov evening, over Wi-Fi to the Mac stand-in):** with "Phone sound to car" on,
+  Tidal playing, and only Waze shared, the stream carried 44.1 kHz stereo AAC at normal loudness
+  (mean −18 dB, peak −0.7 dB) and the user heard the music on the Mac. "Share one app" does not
+  limit which apps' sound is captured. Android still excludes navigation voices, so Waze's voice
+  needs Bluetooth or the phone speaker.
+- Phone is set up for the next drive: Landscape, sound on, car IP saved.
 - Next: try Smoother in the car. If it still freezes often, try Lightest; the car's Wi-Fi may
   carry less than 2.5 Mbps.
 
