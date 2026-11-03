@@ -22,6 +22,13 @@ if cmd == "texts":
     for t, x, y in nodes(dump()):
         if t.strip():
             print(f"{x:5d},{y:5d}  {t}")
+elif cmd == "find":
+    want = sys.argv[2].lower()
+    for t, x, y in nodes(dump()):
+        if want in t.lower():
+            print(f"{x} {y}")
+            sys.exit(0)
+    sys.exit(1)
 elif cmd == "tap":
     want = sys.argv[2].lower()
     for t, x, y in nodes(dump()):

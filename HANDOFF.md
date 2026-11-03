@@ -71,6 +71,13 @@ to act like a slow car.
   and **auto-reconnect** (re-sends Play when the car drops the stream; Stop/Reconnect buttons in
   the notification). The app now remembers which of the car's two displays (centre/passenger)
   was picked.
+- **Car mode / reconnect test (2 Nov evening, stand-in on the Mac over Wi-Fi):** car mode
+  connected, opened the share prompt by itself, and Waze came to the front once the cast played.
+  When the stand-in hung up, the app recast by itself in 3 s. After a Wi-Fi drop, the recast
+  reached the display but the display couldn't reach the stream: binding the whole process to
+  Wi-Fi had pinned the stream's listening socket to the old network. Fixed in 29d9031 (only
+  outgoing car traffic is pinned now); **the Wi-Fi-drop retest is still to do**
+  (`tools/stand-in-display/reconnect_test.sh`). The notification Stop button is also untested.
 - Next: try Smoother in the car. If it still freezes often, try Lightest; the car's Wi-Fi may
   carry less than 2.5 Mbps.
 
