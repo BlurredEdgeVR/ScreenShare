@@ -25,6 +25,7 @@ class MainActivity : Activity() {
     private lateinit var spinner: ProgressBar
     private lateinit var mirrorButton: Button
     private lateinit var qualityButton: Button
+    private lateinit var soundButton: Button
     private lateinit var urlButton: Button
     private lateinit var rootLayout: LinearLayout
 
@@ -34,6 +35,7 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         CrashLog.install(this)
+        WifiRoute.start(this)
         // crash surface: any uncaught exception is shown on screen so field crashes are diagnosable
         val prevHandler = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { t, e ->
@@ -126,6 +128,11 @@ class MainActivity : Activity() {
             setOnClickListener { chooseQuality() }
         }
         updateQualityButton()
+        soundButton = Button(this).apply {
+            visibility = View.GONE
+            setOnClickListener { toggleSound() }
+        }
+        updateSoundButton()
         urlButton = Button(this).apply {
             text = "Cast an online video link"
             visibility = View.GONE
@@ -214,6 +221,7 @@ class MainActivity : Activity() {
         root.addView(pickButton)
         root.addView(mirrorButton)
         root.addView(qualityButton)
+        root.addView(soundButton)
         root.addView(urlButton)
         val ctlSection = TextView(this).apply {
             text = "── Controls ──"
@@ -379,6 +387,7 @@ class MainActivity : Activity() {
                     pickButton.visibility = View.VISIBLE
                     mirrorButton.visibility = View.VISIBLE
                     qualityButton.visibility = View.VISIBLE
+                    soundButton.visibility = View.VISIBLE
                     urlButton.visibility = View.VISIBLE
                     refreshButton?.let { removeView(it) }
                 }
@@ -410,6 +419,7 @@ class MainActivity : Activity() {
             putExtra(MirrorService.EXTRA_RESULT_CODE, resultCode)
             putExtra(MirrorService.EXTRA_DATA, data)
             putExtra(MirrorService.EXTRA_QUALITY, mirrorQuality().name)
+            putExtra(MirrorService.EXTRA_SOUND, soundOn())
         }
         try {
             if (android.os.Build.VERSION.SDK_INT >= 26) startForegroundService(svc) else startService(svc)
@@ -460,6 +470,30 @@ class MainActivity : Activity() {
             .show()
     }
 
+    private fun soundOn(): Boolean = getPreferences(MODE_PRIVATE).getBoolean("send_sound", false)
+
+    private fun updateSoundButton() {
+        soundButton.text = "Phone sound to car: ${if (soundOn()) "On" else "Off"}"
+    }
+
+    private fun setSound(on: Boolean) {
+        getPreferences(MODE_PRIVATE).edit().putBoolean("send_sound", on).apply()
+        updateSoundButton()
+        if (on) toast("Music and video sound will play through the car with the picture. Waze's voice still uses Bluetooth.")
+        if (MirrorService.isRunning) toast("Applies next time you start mirroring")
+    }
+
+    /** Sound capture needs Android 10+ and the audio permission (it captures playback, not the mic). */
+    private fun toggleSound() {
+        if (soundOn()) { setSound(false); return }
+        if (android.os.Build.VERSION.SDK_INT < 29) { toast("Needs Android 10 or later"); return }
+        if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            setSound(true)
+        } else {
+            requestPermissions(arrayOf(android.Manifest.permission.RECORD_AUDIO), 79)
+        }
+    }
+
     private fun pickVideo() {
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
@@ -482,6 +516,11 @@ class MainActivity : Activity() {
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == 79) {
+            if (grantResults.firstOrNull() == android.content.pm.PackageManager.PERMISSION_GRANTED) setSound(true)
+            else toast("Sound to car needs the audio permission")
+            return
+        }
         if (requestCode == 77 && grantResults.firstOrNull() == android.content.pm.PackageManager.PERMISSION_GRANTED) {
             startMirrorFlow()
         } else if (requestCode == 77) {

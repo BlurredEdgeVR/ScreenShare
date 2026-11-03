@@ -57,6 +57,10 @@ to act like a slow car.
 - The phone's screen must stay on and unlocked while mirroring. The app now holds a dim-screen
   wake lock for the whole mirroring session, so the screen can't time out; the power button
   still locks it.
+- **3-hour drive (2 Nov):** the picture worked the whole time (Landscape, Waze shared on its own). Two problems:
+  - No internet: the phone stayed on the casting Wi-Fi for internet. `network_avoid_bad_wifi` was 0, and Android had once seen the casting network validate, so it stuck with it. That setting is now 1 (set over adb).
+  - No music over Bluetooth: A2DP stayed connected to the car the whole time, so either Tidal couldn't stream (no internet) or the car mutes Bluetooth while casting. To be confirmed on the next drive.
+- Fixes: `WifiRoute` keeps the app's car traffic on Wi-Fi while 4G carries the internet. There is also an optional "Phone sound to car" switch that sends media audio inside the cast stream.
 - Next: try Smoother in the car. If it still freezes often, try Lightest; the car's Wi-Fi may
   carry less than 2.5 Mbps.
 

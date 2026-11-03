@@ -31,6 +31,7 @@ class MirrorService : Service() {
         const val EXTRA_RESULT_CODE = "result_code"
         const val EXTRA_DATA = "data"
         const val EXTRA_QUALITY = "quality"
+        const val EXTRA_SOUND = "sound"
         private const val CHANNEL_ID = "mirror"
         const val ACTION_STOP = "com.screenshare.send.MIRROR_STOP"
 
@@ -80,7 +81,8 @@ class MirrorService : Service() {
         if (code != Activity.RESULT_OK || data == null) {
             stopForeground(true); stopSelf(); return START_NOT_STICKY
         }
-        startMirror(code, data, MirrorQuality.fromName(intent?.getStringExtra(EXTRA_QUALITY)))
+        startMirror(code, data, MirrorQuality.fromName(intent?.getStringExtra(EXTRA_QUALITY)),
+            intent?.getBooleanExtra(EXTRA_SOUND, false) ?: false)
         return START_STICKY
     }
 
@@ -113,9 +115,9 @@ class MirrorService : Service() {
         }
     }
 
-    private fun startMirror(resultCode: Int, data: Intent, quality: MirrorQuality) {
+    private fun startMirror(resultCode: Int, data: Intent, quality: MirrorQuality, sound: Boolean) {
         try {
-            startMirrorInner(resultCode, data, quality)
+            startMirrorInner(resultCode, data, quality, sound)
         } catch (e: Throwable) {
             android.util.Log.e("MirrorService", "startMirror failed", e)
             CrashLog.save(this, e)
@@ -123,7 +125,7 @@ class MirrorService : Service() {
         }
     }
 
-    private fun startMirrorInner(resultCode: Int, data: Intent, quality: MirrorQuality) {
+    private fun startMirrorInner(resultCode: Int, data: Intent, quality: MirrorQuality, sound: Boolean) {
         val metrics: DisplayMetrics = resources.displayMetrics
         // scale the long side down to the preset's limit for bandwidth sanity
         var w = metrics.widthPixels
@@ -182,8 +184,10 @@ class MirrorService : Service() {
         MirrorServer.psiSource = { muxer.buildPatPmt() }
         MirrorServer.skipWhenBehind = quality.skipWhenBehind
         MirrorServer.maxQueuedBytes = quality.bitRate / 8   // about one second of video
+        // Decide on sound before the first PAT/PMT goes out: a PMT that lists an audio track
+        // with nothing arriving on it can make a player wait.
+        muxer.setHasAudio(sound && startAudio())
         MirrorServer.start()
-        muxer.setHasAudio(false)
         try {
             val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as android.net.wifi.WifiManager
             @Suppress("DEPRECATION")
@@ -235,19 +239,39 @@ class MirrorService : Service() {
         }
     }
 
-    private fun startAudio() {
+    /**
+     * Captures what other apps are playing (music, radio, video) and streams it with the picture
+     * as AAC. Android leaves out apps that block capture and navigation voices such as Waze's.
+     * Returns false if capture can't start; the picture then goes out on its own.
+     */
+    @android.annotation.SuppressLint("MissingPermission")
+    private fun startAudio(): Boolean {
+        if (Build.VERSION.SDK_INT < 29) return false
+        val proj = projection ?: return false
+        if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) !=
+            android.content.pm.PackageManager.PERMISSION_GRANTED) return false
         try {
             val sampleRate = 44100
             val minBuf = android.media.AudioRecord.getMinBufferSize(
                 sampleRate, android.media.AudioFormat.CHANNEL_IN_STEREO,
                 android.media.AudioFormat.ENCODING_PCM_16BIT
             )
-            audioRecord = android.media.AudioRecord(
-                android.media.MediaRecorder.AudioSource.MIC, sampleRate,
-                android.media.AudioFormat.CHANNEL_IN_STEREO,
-                android.media.AudioFormat.ENCODING_PCM_16BIT,
-                maxOf(minBuf, 8192)
-            )
+            val capture = android.media.AudioPlaybackCaptureConfiguration.Builder(proj)
+                .addMatchingUsage(android.media.AudioAttributes.USAGE_MEDIA)
+                .addMatchingUsage(android.media.AudioAttributes.USAGE_GAME)
+                .addMatchingUsage(android.media.AudioAttributes.USAGE_UNKNOWN)
+                .build()
+            audioRecord = android.media.AudioRecord.Builder()
+                .setAudioFormat(
+                    android.media.AudioFormat.Builder()
+                        .setEncoding(android.media.AudioFormat.ENCODING_PCM_16BIT)
+                        .setSampleRate(sampleRate)
+                        .setChannelMask(android.media.AudioFormat.CHANNEL_IN_STEREO)
+                        .build()
+                )
+                .setBufferSizeInBytes(maxOf(minBuf, 8192) * 2)
+                .setAudioPlaybackCaptureConfig(capture)
+                .build()
             val aacFormat = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_AAC, sampleRate, 2).apply {
                 setInteger(MediaFormat.KEY_AAC_PROFILE, android.media.MediaCodecInfo.CodecProfileLevel.AACObjectLC)
                 setInteger(MediaFormat.KEY_BIT_RATE, 128_000)
@@ -258,54 +282,65 @@ class MirrorService : Service() {
                 start()
             }
             audioRunning = true
-            audioRecord?.startRecording()
+            audioRecord!!.startRecording()
             audioThread = Thread({
-                val info = MediaCodec.BufferInfo()
-                val pcm = ByteArray(8192)
-                // stereo s16: 4 bytes per sample. Dividing here made audio PTS 16x too fast.
-                val bytesPerUs = sampleRate * 4.0 / 1_000_000.0
-                while (audioRunning) {
-                    val rec = audioRecord ?: break
-                    val n = rec.read(pcm, 0, pcm.size)
-                    if (n <= 0) continue
-                    val c = audioCodec ?: break
-                    // Video frames from the virtual display are stamped with the monotonic
-                    // clock. A counter that starts at 0 puts audio ~minutes away from video.
-                    val durationUs = (n / bytesPerUs).toLong().coerceAtLeast(0L)
-                    val ptsUs = System.nanoTime() / 1000 - durationUs
-                    val inIdx = c.dequeueInputBuffer(10_000)
-                    if (inIdx >= 0) {
-                        val inBuf = c.getInputBuffer(inIdx)!!
-                        inBuf.clear()
-                        inBuf.put(pcm, 0, n)
-                        c.queueInputBuffer(inIdx, 0, n, ptsUs, 0)
-                    }
-                    var outIdx = c.dequeueOutputBuffer(info, 10_000)
-                    while (outIdx >= 0 || outIdx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
-                        if (outIdx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
-                            outIdx = c.dequeueOutputBuffer(info, 0)
-                            continue
+                try {
+                    val info = MediaCodec.BufferInfo()
+                    val pcm = ByteArray(8192)
+                    // stereo s16: 4 bytes per sample
+                    val bytesPerUs = sampleRate * 4.0 / 1_000_000.0
+                    while (audioRunning) {
+                        val rec = audioRecord ?: break
+                        val n = rec.read(pcm, 0, pcm.size)
+                        if (n <= 0) continue
+                        val c = audioCodec ?: break
+                        // Video frames are stamped with the monotonic clock; stamp audio the same way.
+                        val durationUs = (n / bytesPerUs).toLong().coerceAtLeast(0L)
+                        val ptsUs = System.nanoTime() / 1000 - durationUs
+                        val inIdx = c.dequeueInputBuffer(10_000)
+                        if (inIdx >= 0) {
+                            val inBuf = c.getInputBuffer(inIdx) ?: continue
+                            inBuf.clear()
+                            inBuf.put(pcm, 0, minOf(n, inBuf.capacity()))
+                            c.queueInputBuffer(inIdx, 0, minOf(n, inBuf.capacity()), ptsUs, 0)
                         }
-                        if (info.size > 0 && info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG == 0) {
-                            val out = ByteArray(info.size)
-                            val buf = c.getOutputBuffer(outIdx)
-                            if (buf != null) {
-                                buf.position(info.offset)
-                                buf.limit(info.offset + info.size)
-                                buf.get(out)
-                                // wrap raw AAC into ADTS header (LC, 44.1k stereo)
-                                val adts = adtsHeader(info.size, sampleRate, 2) + out
-                                MirrorServer.broadcast(muxer.packetizeAudio(adts, info.presentationTimeUs), false)
+                        var outIdx = c.dequeueOutputBuffer(info, 0)
+                        while (outIdx >= 0 || outIdx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                            if (outIdx >= 0) {
+                                if (info.size > 0 && info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG == 0) {
+                                    val buf = c.getOutputBuffer(outIdx)
+                                    if (buf != null) {
+                                        val out = ByteArray(info.size)
+                                        buf.position(info.offset)
+                                        buf.limit(info.offset + info.size)
+                                        buf.get(out)
+                                        // raw AAC needs an ADTS header (LC, 44.1 kHz stereo) inside MPEG-TS
+                                        val adts = adtsHeader(info.size, sampleRate, 2) + out
+                                        MirrorServer.broadcast(muxer.packetizeAudio(adts, info.presentationTimeUs), false)
+                                    }
+                                }
+                                c.releaseOutputBuffer(outIdx, false)
                             }
+                            outIdx = c.dequeueOutputBuffer(info, 0)
                         }
-                        c.releaseOutputBuffer(outIdx, false)
-                        outIdx = c.dequeueOutputBuffer(info, 0)
+                    }
+                } catch (t: Throwable) {
+                    // Stopping releases the recorder and codec under this thread; only a failure
+                    // mid-stream is worth reporting. The picture carries on either way.
+                    if (audioRunning) {
+                        android.util.Log.e("MirrorService", "audio loop stopped", t)
+                        CrashLog.save(this@MirrorService, t, "audio")
                     }
                 }
-            }, "MirrorAudio").also { it.start() }
-        } catch (_: Exception) {
-            // audio optional: video continues without it
+            }, "MirrorAudio").also { it.isDaemon = true; it.start() }
+            return true
+        } catch (t: Throwable) {
+            android.util.Log.e("MirrorService", "sound capture failed to start", t)
             audioRunning = false
+            try { audioRecord?.release() } catch (_: Throwable) {}
+            try { audioCodec?.release() } catch (_: Throwable) {}
+            audioRecord = null; audioCodec = null
+            return false
         }
     }
 
@@ -436,9 +471,11 @@ class MirrorService : Service() {
         try { psiThread?.interrupt() } catch (_: Exception) {}
         try { psiThread?.join(500) } catch (_: Exception) {}
         psiThread = null
-        try { audioRecord?.stop(); audioRecord?.release() } catch (_: Exception) {}
-        try { audioCodec?.stop(); audioCodec?.release() } catch (_: Exception) {}
+        // Stop recording first (it unblocks read()), let the audio thread finish, then release.
+        try { audioRecord?.stop() } catch (_: Exception) {}
         try { audioThread?.join(500) } catch (_: Exception) {}
+        try { audioRecord?.release() } catch (_: Exception) {}
+        try { audioCodec?.stop(); audioCodec?.release() } catch (_: Exception) {}
         audioRecord = null; audioCodec = null; audioThread = null
         try { android.media.AudioManager::class.java } catch (_: Exception) {}
         try { wifiLock?.release() } catch (_: Throwable) {}

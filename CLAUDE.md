@@ -36,6 +36,8 @@ The sender uses only the plain Android SDK. Its UI is built in code in `MainActi
 
 **Finding a renderer:** `DlnaDiscoverer` sends SSDP `M-SEARCH` and collects `LOCATION` URLs. If nothing answers, `SubnetScanner` probes TCP 49152 across the Wi-Fi /24, and `MainActivity` checks each hit by fetching `http://<ip>:49152/description.xml`. The last IP used is kept in activity preferences (`last_tv_ip`).
 
+**Wi-Fi binding:** `WifiRoute` binds the whole process to the Wi-Fi network (`bindProcessToNetwork`). The car's casting hotspot has no internet, so once Android sends internet traffic over 4G, unbound requests to the car would follow it there and fail. The app never needs the internet itself.
+
 **Controlling it:** `DlnaController` is a single-threaded SOAP client for AVTransport.
 - `describe()` parses the description with regexes and resolves `controlURL` against `URLBase` or the description URL, the way a browser would. It also stores alternate URL forms. On HTTP 404, `soap()` tries those alternates and remembers the one that works. Any other error stops the retries, because it means the renderer answered.
 - `setUriAndPlay()` sends `Stop`, then `SetAVTransportURI` with DIDL metadata, then `Play`. If that fails, it retries once with no metadata.
@@ -61,7 +63,7 @@ Then `DlnaController.playLiveStream` tells the renderer to fetch that URL.
 - While mirroring, `MirrorService` holds a low-latency Wi-Fi lock and a `SCREEN_DIM_WAKE_LOCK`. A dark or locked phone screen freezes the car's picture, and an activity's `FLAG_KEEP_SCREEN_ON` doesn't help once Waze is in front. Both locks are released in `stopSelfSafely()`.
 - If the drain loop fails mid-stream, the stream ends. The error is saved with `CrashLog` and shown the next time the app opens.
 - `TsMuxer` is a hand-written MPEG-TS muxer: PAT on PID 0, PMT on 0x1000, H.264 on 0x100 (also the PCR PID), and AAC on 0x101 only if `setHasAudio(true)`. `buildPatPmt()` must build new packets on every call so continuity counters advance. Don't cache it.
-- Audio is turned off. `MirrorService.startAudio()` still exists but is never called, and `setHasAudio(false)` is set. It captured the cabin mic rather than phone audio and could crash the app.
+- Sound is optional ("Phone sound to car", pref `send_sound`, `EXTRA_SOUND`, off by default). `startAudio()` uses `AudioPlaybackCapture` on the projection, capturing USAGE_MEDIA, GAME and UNKNOWN, and encodes 44.1 kHz stereo AAC into PID 0x101. Android never lets navigation voices be captured, so Waze's voice still needs Bluetooth. `setHasAudio()` is decided before the server starts, because a PMT that lists audio with none arriving can stall a player. The old mic capture (which recorded the car cabin) is gone.
 
 **Casting files:** `LocalRelay` serves one SAF `content://` URI over HTTP on a random port, with `Range`/206 support so the renderer can seek. The content type comes from the file extension.
 
