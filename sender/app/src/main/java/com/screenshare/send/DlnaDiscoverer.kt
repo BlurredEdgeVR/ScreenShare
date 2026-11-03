@@ -30,6 +30,7 @@ object DlnaDiscoverer {
                 DatagramSocket(null).use { sock ->
                     sock.reuseAddress = true
                     sock.bind(java.net.InetSocketAddress(0))
+                    WifiRoute.bind(sock)
                     sock.broadcast = true
                     sock.soTimeout = 300
                     val group = InetAddress.getByName("239.255.255.250")

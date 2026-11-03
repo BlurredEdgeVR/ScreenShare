@@ -5,37 +5,42 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
+import java.net.DatagramSocket
+import java.net.Socket
+import java.net.URL
+import java.net.URLConnection
 
 /**
- * Keeps the phone on the car's Wi-Fi and sends all of this app's traffic over it. The car's casting
- * hotspot has no internet, so with `network_avoid_bad_wifi` on, Android uses 4G for internet and
- * may drop a Wi-Fi nobody asks for. Requesting the Wi-Fi keeps it connected, and binding the
- * process stops the app's requests to the car from following the phone onto 4G. The app itself
- * never needs the internet, so binding the whole process is safe.
+ * Keeps the phone on the car's Wi-Fi and sends the app's requests to the car over it.
+ *
+ * The car's casting hotspot has no internet, so with `network_avoid_bad_wifi` on, Android uses
+ * 4G for internet and may drop a Wi-Fi nobody asks for. Requesting the Wi-Fi keeps it connected.
+ * Outgoing sockets are pinned to it with [open] and [bind], so requests to the car don't follow
+ * the phone onto 4G.
+ *
+ * Only outgoing sockets are pinned, not the whole process. A listening socket created while
+ * pinned keeps the old network's mark, so after a Wi-Fi drop and rejoin (a new Network) the car
+ * could no longer reach the stream. Unpinned listeners answer on whichever network a connection
+ * arrives on.
  */
 object WifiRoute {
-    @Volatile private var bound: Network? = null
+    @Volatile private var current: Network? = null
     private var callback: ConnectivityManager.NetworkCallback? = null
 
     @Synchronized
     fun start(context: Context) {
         if (callback != null) return
         val cm = context.applicationContext.getSystemService(ConnectivityManager::class.java) ?: return
-        // Bind now if Wi-Fi is already up, so the first request to the car already uses it.
+        // Pick up Wi-Fi now if it's already up, so the first request to the car already uses it.
         try {
             @Suppress("DEPRECATION")
-            cm.allNetworks.firstOrNull {
+            current = cm.allNetworks.firstOrNull {
                 cm.getNetworkCapabilities(it)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
-            }?.let { bind(cm, it) }
+            }
         } catch (_: Exception) {}
         val cb = object : ConnectivityManager.NetworkCallback() {
-            override fun onAvailable(network: Network) = bind(cm, network)
-            override fun onLost(network: Network) {
-                if (bound == network) {
-                    try { cm.bindProcessToNetwork(null) } catch (_: Exception) {}
-                    bound = null
-                }
-            }
+            override fun onAvailable(network: Network) { current = network }
+            override fun onLost(network: Network) { if (current == network) current = null }
         }
         val request = NetworkRequest.Builder()
             .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
@@ -51,9 +56,21 @@ object WifiRoute {
         }
     }
 
-    private fun bind(cm: ConnectivityManager, network: Network) {
-        try {
-            if (cm.bindProcessToNetwork(network)) bound = network
-        } catch (_: Exception) {}
+    /** Opens [url] over Wi-Fi when it's up, otherwise the normal way. */
+    fun open(url: URL): URLConnection {
+        val n = current ?: return url.openConnection()
+        return try { n.openConnection(url) } catch (_: Exception) { url.openConnection() }
+    }
+
+    /** Pins an unconnected socket to Wi-Fi when it's up. */
+    fun bind(socket: Socket) {
+        val n = current ?: return
+        try { n.bindSocket(socket) } catch (_: Exception) {}
+    }
+
+    /** Pins an unconnected datagram socket to Wi-Fi when it's up. */
+    fun bind(socket: DatagramSocket) {
+        val n = current ?: return
+        try { n.bindSocket(socket) } catch (_: Exception) {}
     }
 }

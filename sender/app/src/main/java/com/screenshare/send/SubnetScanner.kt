@@ -32,6 +32,7 @@ object SubnetScanner {
                 pool.execute {
                     try {
                         val s = Socket()
+                        WifiRoute.bind(s)
                         s.connect(InetSocketAddress(ip, 49152), 250)
                         found.add(ip)
                         s.close()

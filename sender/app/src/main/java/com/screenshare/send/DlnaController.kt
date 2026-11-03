@@ -181,7 +181,7 @@ object DlnaController {
 
     private fun soapRaw(url: String, action: String, body: String): String {
         val bytes = body.toByteArray(Charsets.UTF_8)
-        val conn = URL(url).openConnection() as HttpURLConnection
+        val conn = WifiRoute.open(URL(url)) as HttpURLConnection
         conn.requestMethod = "POST"
         conn.doOutput = true
         conn.connectTimeout = 5000
@@ -201,7 +201,7 @@ object DlnaController {
     }
 
     private fun httpGet(url: String): String {
-        val conn = URL(url).openConnection() as HttpURLConnection
+        val conn = WifiRoute.open(URL(url)) as HttpURLConnection
         conn.connectTimeout = 5000
         conn.readTimeout = 8000
         val text = conn.inputStream.bufferedReader(Charsets.UTF_8).use(BufferedReader::readText)
