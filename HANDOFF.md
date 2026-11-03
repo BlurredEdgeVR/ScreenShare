@@ -101,6 +101,21 @@ to act like a slow car.
   - A connection log (`files/events.log`, plus a button in the app) records which network
     carries the internet, Wi-Fi joins and losses, display searches and reconnects. Read it
     after the next drive.
+- **Causes found over adb after the drive (3 Nov):**
+  - Internet: `dumpsys connectivity` shows `Bad Wi-Fi avoidance: false`, `Actively prefer bad
+    wifi: true`, `Actively prefer bad wifi conf: force true`. This phone's config prefers a
+    Wi-Fi without internet over working mobile data unless `network_avoid_bad_wifi` is 1, and
+    Samsung resets that to 0. Samsung's "Switch to mobile data"
+    (`wifi_watchdog_poor_network_test_enabled=1`) was on and didn't help. Mobile data works:
+    the O2 eSIM roams on Liberty, in Costa Rica. No setting fixes it, so the app-joined link is
+    the fix.
+  - Finding the display: the car's renderer listens on a random port that changes when the car
+    starts (saved: `http://192.168.5.95:43697/upnp/dev/<uuid>/desc`). The old saved URL
+    then fails, and the subnet scan (port 49152) can't find it, so only SSDP works.
+- Build 4c07b2e installed on the phone (3 Nov, 17:13). Checked at home: it opens, logs, tries
+  the saved car URL, then searches. With a test SSID, the app-joined request reached Android's
+  "Searching for devices…" panel ("No devices found" after about 15 s). Cancel was logged, and
+  turning it off restored the phone's own Wi-Fi. The setting is currently off.
 - Next: try Smoother in the car. If it still freezes often, try Lightest; the car's Wi-Fi may
   carry less than 2.5 Mbps.
 
