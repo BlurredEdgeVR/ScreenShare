@@ -76,8 +76,13 @@ to act like a slow car.
   When the stand-in hung up, the app recast by itself in 3 s. After a Wi-Fi drop, the recast
   reached the display but the display couldn't reach the stream: binding the whole process to
   Wi-Fi had pinned the stream's listening socket to the old network. Fixed in 29d9031 (only
-  outgoing car traffic is pinned now); **the Wi-Fi-drop retest is still to do**
-  (`tools/stand-in-display/reconnect_test.sh`). The notification Stop button is also untested.
+  outgoing car traffic is pinned now); the Wi-Fi-drop retest is still
+  open. On 3 Nov it was inconclusive: after Wi-Fi came back on, the phone joined a different
+  Glamping network that couldn't reach the Mac. The app then tried three times and showed "Lost
+  the car" (correct). A recast after the stand-in hangs up worked in 6 s, and the notification
+  Stop button works.
+- `network_avoid_bad_wifi` doesn't stick on this Samsung: it resets to 0 whenever Wi-Fi turns
+  on. Whether the phone keeps 4G internet on the car's hotspot still needs checking on a drive.
 - Next: try Smoother in the car. If it still freezes often, try Lightest; the car's Wi-Fi may
   carry less than 2.5 Mbps.
 
