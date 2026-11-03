@@ -104,6 +104,8 @@ class MainActivity : Activity() {
     private fun buildScreen() {
         window.statusBarColor = Palette.BG
         window.navigationBarColor = Palette.BG
+        // The screen is already dark: don't let the system's dark mode recolour it.
+        if (android.os.Build.VERSION.SDK_INT >= 29) window.decorView.isForceDarkAllowed = false
         val match = ViewGroup.LayoutParams.MATCH_PARENT
         val wrap = ViewGroup.LayoutParams.WRAP_CONTENT
         val medium = android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL)
