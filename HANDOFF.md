@@ -5,7 +5,7 @@ centre screen of a China-market Zeekr (AI OS, renderer advertises as `ZEEKR-2882
 so Waze can be used on the car screen. The car has no Android Auto or Miracast; its
 "Video casting" screen is a DLNA/UPnP MediaRenderer reached over the car's own Wi-Fi hotspot.
 
-## Status (2 Nov 2026)
+## Status (3 Nov 2026)
 
 Mirroring **works**: the car displays the live phone screen. Two open problems:
 
@@ -83,6 +83,24 @@ to act like a slow car.
   Stop button works.
 - `network_avoid_bad_wifi` doesn't stick on this Samsung: it resets to 0 whenever Wi-Fi turns
   on. Whether the phone keeps 4G internet on the car's hotspot still needs checking on a drive.
+- **Second drive (3 Nov):** picture and music worked well. Two problems:
+  - Still no 4G internet. The phone kept the car's Wi-Fi as its internet connection ("no
+    internet" on Wi-Fi, no mobile data). On 2 Nov the saved car network had no
+    `noInternetAccessExpected` and had never validated, so this is Samsung's own policy, not a
+    "stay connected" choice.
+  - The car's displays weren't found first time. The user had to disconnect and rejoin the
+    car's Wi-Fi a few times. The app only retried the saved description URL and never searched.
+- Fixes in 3160392, **not yet installed or tested**:
+  - Optional "Keep 4G internet in the car": the app joins the car's Wi-Fi itself with a
+    `WifiNetworkSpecifier`, a link for this app only that Android never uses for internet. Setup:
+    enter the car Wi-Fi password in the app, forget `Zeekr-2882_Casting` in Wi-Fi settings, and
+    approve Android's prompt the first time. Unknown: whether Samsung remembers the approval or
+    asks every drive.
+  - If the saved display doesn't answer, search by SSDP or subnet scan and pick it by name
+    (`last_tv_name`). Car mode keeps looking for 3 minutes.
+  - A connection log (`files/events.log`, plus a button in the app) records which network
+    carries the internet, Wi-Fi joins and losses, display searches and reconnects. Read it
+    after the next drive.
 - Next: try Smoother in the car. If it still freezes often, try Lightest; the car's Wi-Fi may
   carry less than 2.5 Mbps.
 
