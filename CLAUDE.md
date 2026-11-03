@@ -32,7 +32,7 @@ cd tv && ./gradlew assembleDebug            # receiver app (not built by CI)
 
 ### sender (`com.screenshare.send`): zero dependencies, by design
 
-The sender uses only the plain Android SDK. Its UI is built in code in `MainActivity` (no layout XML). Don't add libraries to it.
+The sender uses only the plain Android SDK. Its UI is built in code, with no layout XML. Don't add libraries to it. `Ui.kt` holds the palette and small builders (buttons, list rows, grouped lists, a column capped at 560dp so the screen stays readable sideways). In `MainActivity`, `buildScreen()` lays out the screen: a status panel, the main actions, then Settings and More. `refreshUi()` decides what shows for each state: searching, connected, mirroring, or playing a video. The base theme is dark (`res/values/themes.xml`) to match.
 
 **Finding a renderer:** `DlnaDiscoverer` sends SSDP `M-SEARCH` and collects `LOCATION` URLs. If nothing answers, `SubnetScanner` probes TCP 49152 across the Wi-Fi /24. `MainActivity.findDisplays` fetches each candidate's description, keeps the ones with AVTransport, and fills in their names. The display used last is kept in activity preferences (`last_tv_ip`, `last_tv_desc`, `last_tv_name`). On launch, `connectSaved()` tries the saved description URL. If nothing answers there, or a display with a different name does, it searches and picks the saved display by name. The Zeekr's renderers listen on a random port (`http://192.168.5.95:<port>/upnp/dev/<uuid>/desc`) that changes when the car starts, so for the car only SSDP finds them. The port-49152 scan only finds the `tv` receiver.
 

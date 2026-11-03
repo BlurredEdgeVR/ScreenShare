@@ -542,7 +542,14 @@ class MainActivity : Activity() {
 
     private fun chooseQuality() {
         val all = MirrorQuality.entries
-        val items = all.map { "${it.title}\n${it.detail}" }.toTypedArray()
+        // Name on the first line, details smaller and lighter underneath, so the list scans.
+        val items = all.map { q ->
+            android.text.SpannableString("${q.title}\n${q.detail}").apply {
+                val start = q.title.length + 1
+                setSpan(android.text.style.RelativeSizeSpan(0.8f), start, length, 0)
+                setSpan(android.text.style.ForegroundColorSpan(Palette.MUTED), start, length, 0)
+            }
+        }.toTypedArray<CharSequence>()
         android.app.AlertDialog.Builder(this)
             .setTitle("Mirror quality")
             .setSingleChoiceItems(items, all.indexOf(mirrorQuality())) { dialog, which ->

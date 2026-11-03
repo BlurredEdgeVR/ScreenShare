@@ -116,6 +116,12 @@ to act like a slow car.
   the saved car URL, then searches. With a test SSID, the app-joined request reached Android's
   "Searching for devices…" panel ("No devices found" after about 15 s). Cancel was logged, and
   turning it off restored the phone's own Wi-Fi. The setting is currently off.
+- **Main screen tidied (3 Nov):** a status panel (display and state, with Change display, or
+  Search again and Enter IP), one main action (Mirror and open Waze, or Open Waze and Stop
+  mirroring while mirroring), then Settings and More as grouped lists. Checked on the phone
+  against the stand-in in each state (not connected, connected, mirroring, stopped, sideways).
+  Dark text on the amber button draws as #64503A rather than #2A1600 on this phone, even with
+  a dark theme and force-dark off. It's still about 4.8:1 contrast.
 - Next: try Smoother in the car. If it still freezes often, try Lightest; the car's Wi-Fi may
   carry less than 2.5 Mbps.
 
