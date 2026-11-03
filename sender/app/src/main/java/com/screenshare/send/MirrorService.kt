@@ -80,6 +80,8 @@ class MirrorService : Service() {
         }
         if (intent?.action == ACTION_RECONNECT) {
             if (!isRunning) { stopSelf(); return START_NOT_STICKY }
+            EventLog.add("Reconnect tapped")
+            WifiRoute.ensure(userAction = true)
             keeper?.reconnectNow()
             return START_STICKY
         }
@@ -96,6 +98,7 @@ class MirrorService : Service() {
             CrashLog.save(this, e)
             stopSelf(); return START_NOT_STICKY
         }
+        EventLog.init(this)
         if (isRunning) return START_STICKY
         // RESULT_OK is -1, so the old "code < 0" check rejected every successful grant.
         val code = intent?.getIntExtra(EXTRA_RESULT_CODE, Int.MIN_VALUE) ?: Int.MIN_VALUE
@@ -243,6 +246,7 @@ class MirrorService : Service() {
             }
         } catch (_: Throwable) {}
         isRunning = true
+        EventLog.add("Mirroring started: ${quality.title}, ${width}x$height${if (sound) ", sound to car" else ""}")
         drainCodec()
         startPsiRefresh()
         target?.let { car -> keeper = CarKeeper(car).also { it.start() } }
@@ -503,6 +507,9 @@ class MirrorService : Service() {
     }
 
     private fun stopSelfSafely() {
+        if (isRunning) EventLog.add("Mirroring stopped")
+        // Don't leave a prompt for the car's Wi-Fi waiting once mirroring is over.
+        WifiRoute.cancelPending()
         keeper?.halt()
         keeper = null
         isRunning = false
@@ -574,14 +581,18 @@ class MirrorService : Service() {
             MirrorServer.dropStalled(STALL_MS)
             if (MirrorServer.clientCount() > 0) {
                 everConnected = true
-                if (connectedSince == 0L) connectedSince = now
+                if (connectedSince == 0L) { connectedSince = now; EventLog.add("The car is reading the stream") }
                 if (now - connectedSince > HOLD_MS) failures = 0
                 lastSeen = now
                 show("Streaming to ${car.friendlyName.ifBlank { "the car" }}")
                 return
             }
+            if (connectedSince != 0L) EventLog.add("The car stopped reading the stream")
             connectedSince = 0
+            // After the app's own car Wi-Fi drops, ask for it again.
+            if (WifiRoute.joinsCarWifi && WifiRoute.localIp() == null) WifiRoute.ensure(userAction = false)
             if (now - lastSeen > GIVE_UP_MS) {
+                EventLog.add("No car for 10 minutes: stopping")
                 running = false
                 android.os.Handler(android.os.Looper.getMainLooper()).post { stopSelfSafely() }
                 return
@@ -590,11 +601,19 @@ class MirrorService : Service() {
             if (now - lastSeen < GRACE_MS || now < nextAttempt) return
             val ip = MirrorServer.localIp()
             if (ip == null) { show("Waiting for the car's Wi-Fi…"); return }
-            if (failures >= 3) { gaveUp = true; show("Lost the car. Tap Reconnect to try again."); return }
+            if (failures >= 3) {
+                gaveUp = true
+                EventLog.add("Gave up reconnecting after 3 tries")
+                show("Lost the car. Tap Reconnect to try again.")
+                return
+            }
             failures++
             nextAttempt = now + RETRY_MS
             show("Reconnecting to the car…")
-            DlnaController.playLiveStream(car, "http://$ip:8080/live.ts?k=${MirrorServer.streamToken}", "Screen mirror") { }
+            DlnaController.playLiveStream(car, "http://$ip:8080/live.ts?k=${MirrorServer.streamToken}", "Screen mirror") { ok ->
+                val result = if (ok) "the car accepted the stream" else "the car didn't answer (${DlnaController.lastError.take(200)})"
+                EventLog.add("Reconnect try $failures: $result")
+            }
         }
 
         private fun show(text: String) {

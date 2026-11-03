@@ -20,12 +20,19 @@ class MainActivity : Activity() {
     companion object {
         /** Home-screen shortcut: connect to the saved car screen, start mirroring, open Waze. */
         const val ACTION_CAR_MODE = "com.screenshare.send.CAR_MODE"
+        /** How long car mode keeps looking for the car's display. */
+        private const val CAR_WAIT_MS = 3 * 60_000L
+        /** How long to wait for the app to join the car's Wi-Fi outside car mode. */
+        private const val WIFI_WAIT_MS = 40_000L
     }
 
     private var carMode = false
     private var carModeStarted = false
-    private var connectTries = 0
+    private var carDeadline = 0L
+    private var wifiWaitUntil = 0L
+    private val handler = android.os.Handler(android.os.Looper.getMainLooper())
     private lateinit var carButton: Button
+    private lateinit var carWifiButton: Button
 
     private var endpoints: RendererEndpoints? = null
     private lateinit var statusView: TextView
@@ -45,6 +52,7 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         CrashLog.install(this)
+        EventLog.init(this)
         WifiRoute.start(this)
         // crash surface: any uncaught exception is shown on screen so field crashes are diagnosable
         val prevHandler = Thread.getDefaultUncaughtExceptionHandler()
@@ -254,6 +262,13 @@ class MainActivity : Activity() {
             text = "Add Car mode to home screen"
             setOnClickListener { pinCarModeShortcut() }
         })
+        carWifiButton = Button(this).apply { setOnClickListener { chooseCarWifi() } }
+        updateCarWifiButton()
+        root.addView(carWifiButton)
+        root.addView(Button(this).apply {
+            text = "Connection log"
+            setOnClickListener { showLog() }
+        })
         rootLayout = root
         // Scrolls, so the controls stay reachable when the phone is sideways in a car mount.
         setContentView(android.widget.ScrollView(this).apply {
@@ -265,64 +280,145 @@ class MainActivity : Activity() {
         deviceButton.setOnClickListener { showDevicePicker() }
         pickButton.setOnClickListener { pickVideo() }
         carMode = intent?.action == ACTION_CAR_MODE
+        EventLog.add(if (carMode) "Car mode started" else "App opened")
+        if (carMode) carDeadline = System.currentTimeMillis() + CAR_WAIT_MS
         if (carMode && MirrorService.isRunning) openWaze()
+        if (savedDevice() != null) connectSaved() else startSearch()
+    }
+
+    private fun alive() = !isFinishing && !isDestroyed
+
+    /** The display used last time, if any. */
+    private fun savedDevice(): CastDevice? {
         val prefs = getPreferences(MODE_PRIVATE)
-        val lastIp = prefs.getString("last_tv_ip", null)
+        val ip = prefs.getString("last_tv_ip", null) ?: return null
         // The car shows two displays (centre and passenger) on one IP, so reuse the exact
         // description URL that was picked, as long as it still belongs to the saved IP.
-        val lastDesc = prefs.getString("last_tv_desc", null)?.takeIf {
-            try { java.net.URL(it).host == lastIp } catch (_: Exception) { false }
+        val desc = prefs.getString("last_tv_desc", null)?.takeIf {
+            try { java.net.URL(it).host == ip } catch (_: Exception) { false }
         }
-        if (lastIp != null) {
-            connect(CastDevice("", lastDesc ?: "http://$lastIp:49152/description.xml", lastIp))
-        } else {
-            startSearch()
+        return CastDevice(prefs.getString("last_tv_name", null) ?: "", desc ?: "http://$ip:49152/description.xml", ip)
+    }
+
+    /**
+     * Connects to the display used last time. If it doesn't answer at its saved address, or a
+     * different display answers there, it searches for it by name, because the car's displays
+     * may come back on another address. Car mode keeps trying for [CAR_WAIT_MS], since the phone
+     * can take a while to join the car's Wi-Fi and the car's displays a while to start.
+     */
+    @SuppressLint("SetTextI18n")
+    private fun connectSaved() {
+        if (!alive()) return
+        val saved = savedDevice() ?: return startSearch()
+        if (carMode) WifiRoute.ensure(userAction = false)
+        if (waitForCarWifi { connectSaved() }) return
+        statusView.text = "Connecting: ${saved.friendlyName.ifBlank { saved.ip }}…"
+        DlnaController.describe(saved.descriptionUrl) { ep ->
+            runOnUiThread {
+                if (!alive()) return@runOnUiThread
+                if (ep != null && (saved.friendlyName.isBlank() || ep.friendlyName == saved.friendlyName)) {
+                    connected(saved, ep)
+                    return@runOnUiThread
+                }
+                EventLog.add(if (ep == null) "Saved display didn't answer at ${saved.descriptionUrl}"
+                    else "Another display (${ep.friendlyName}) answered at ${saved.descriptionUrl}")
+                if (!carMode) { startSearch(); return@runOnUiThread }
+                statusView.text = "Car mode: looking for the car's display…"
+                findDisplays { found ->
+                    runOnUiThread {
+                        if (!alive()) return@runOnUiThread
+                        val match = pickSaved(found, saved)
+                        when {
+                            match != null -> connect(match)
+                            // Nothing saved to tell the displays apart, so ask.
+                            found.isNotEmpty() && saved.friendlyName.isBlank() -> chooseFrom(found)
+                            System.currentTimeMillis() < carDeadline -> {
+                                statusView.text = "Car mode: waiting for the car's display…"
+                                handler.postDelayed({ connectSaved() }, 3000)
+                            }
+                            found.isNotEmpty() -> chooseFrom(found)
+                            else -> noDisplayFound()
+                        }
+                    }
+                }
+            }
         }
+    }
+
+    /**
+     * When the app joins the car's Wi-Fi itself, waits until it has, then runs [then]. Returns
+     * false if there's nothing to wait for.
+     */
+    @SuppressLint("SetTextI18n")
+    private fun waitForCarWifi(then: () -> Unit): Boolean {
+        if (!WifiRoute.joiningCarWifi) { wifiWaitUntil = 0; return false }
+        val now = System.currentTimeMillis()
+        if (wifiWaitUntil == 0L) wifiWaitUntil = now + WIFI_WAIT_MS
+        if (now > maxOf(wifiWaitUntil, carDeadline)) { wifiWaitUntil = 0; return false }
+        statusView.text = "Joining the car's Wi-Fi (${WifiRoute.carWifiName})…"
+        spinner.visibility = View.VISIBLE
+        handler.postDelayed({ if (alive()) then() }, 1000)
+        return true
+    }
+
+    /** Finds displays with SSDP, or by probing the Wi-Fi's /24 if nothing answers, and reads each one's name. */
+    private fun findDisplays(cb: (List<CastDevice>) -> Unit) {
+        DlnaDiscoverer.search(3000) { ssdp ->
+            if (ssdp.isNotEmpty()) describeAll(ssdp, cb)
+            // SSDP can't cross subnets or may be filtered: probe the DLNA port instead.
+            else SubnetScanner.scan { ips -> describeAll(ips.map { CastDevice("", "http://$it:49152/description.xml", it) }, cb) }
+        }
+    }
+
+    /** Keeps only the candidates that are renderers, with their names filled in. */
+    private fun describeAll(candidates: List<CastDevice>, cb: (List<CastDevice>) -> Unit) {
+        if (candidates.isEmpty()) { EventLog.add("Search found no displays"); cb(emptyList()); return }
+        val found = java.util.Collections.synchronizedList(mutableListOf<CastDevice>())
+        val left = java.util.concurrent.atomic.AtomicInteger(candidates.size)
+        for (d in candidates) {
+            DlnaController.describe(d.descriptionUrl) { ep ->
+                if (ep != null) found.add(d.copy(friendlyName = ep.friendlyName))
+                if (left.decrementAndGet() == 0) {
+                    val list = found.sortedBy { it.friendlyName }
+                    EventLog.add("Search found ${list.size} display(s)" +
+                        list.joinToString("") { "\n    ${it.friendlyName} at ${it.descriptionUrl}" })
+                    cb(list)
+                }
+            }
+        }
+    }
+
+    /** The saved display among [found]: by name, or, with no name saved, by address or as the only one. */
+    private fun pickSaved(found: List<CastDevice>, saved: CastDevice): CastDevice? =
+        if (saved.friendlyName.isNotBlank()) found.firstOrNull { it.friendlyName == saved.friendlyName }
+        else found.firstOrNull { it.descriptionUrl == saved.descriptionUrl } ?: found.singleOrNull()
+
+    @SuppressLint("SetTextI18n")
+    private fun noDisplayFound() {
+        spinner.visibility = View.GONE
+        statusView.text = "No display found\n\nCheck the phone is on the car's Wi-Fi and search again, or enter the display's IP"
+        addRefreshButton()
+        addManualEntryButton()
     }
 
     @SuppressLint("SetTextI18n")
     private fun startSearch() {
+        if (!alive()) return
+        if (waitForCarWifi { startSearch() }) return
         statusView.text = "Searching for displays…"
         spinner.visibility = View.VISIBLE
         deviceButton.visibility = View.GONE
         pickButton.visibility = View.GONE
         controlsRow.visibility = View.GONE
-        DlnaDiscoverer.search(4000) { devices ->
+        findDisplays { devices ->
             runOnUiThread {
+                if (!alive()) return@runOnUiThread
                 spinner.visibility = View.GONE
-                if (devices.isEmpty()) {
-                    // cross-subnet fallback: TCP-probe 49152 on the phone's own /24 (SSDP cannot cross subnets)
-                    SubnetScanner.scan { ips ->
-                        // verify each candidate really is a cast device before offering it
-                        var remaining = ips.size
-                        val verified = java.util.Collections.synchronizedList(mutableListOf<CastDevice>())
-                        if (ips.isEmpty()) {
-                            runOnUiThread {
-                                statusView.text = "No display found\n\nPhone and display may be on different networks\nUse the button below to enter the IP manually"
-                                addRefreshButton()
-                                addManualEntryButton()
-                            }
-                            return@scan
-                        }
-                        for (ip in ips) {
-                            DlnaController.describe("http://$ip:49152/description.xml") { ep ->
-                                if (ep != null) verified.add(CastDevice(ep.friendlyName, "http://$ip:49152/description.xml", ip))
-                                remaining--
-                                if (remaining == 0) {
-                                    runOnUiThread {
-                                        if (verified.isNotEmpty()) chooseFrom(verified.toList())
-                                        else {
-                                            statusView.text = "No display found\n\nUse the button below to enter the IP manually"
-                                            addRefreshButton()
-                                            addManualEntryButton()
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                } else {
-                    chooseFrom(devices)
+                val match = savedDevice()?.let { pickSaved(devices, it) }
+                when {
+                    match != null -> connect(match)
+                    devices.isEmpty() -> noDisplayFound()
+                    else -> chooseFrom(devices)
                 }
             }
         }
@@ -335,7 +431,11 @@ class MainActivity : Activity() {
         if (refreshButton == null) {
             refreshButton = Button(this).apply {
                 text = "Search again"
-                setOnClickListener { removeView(this); removeManual(); startSearch() }
+                setOnClickListener {
+                    removeView(this); removeManual()
+                    WifiRoute.ensure(userAction = true)
+                    startSearch()
+                }
             }
             rootLayout.addView(refreshButton)
         }
@@ -400,45 +500,51 @@ class MainActivity : Activity() {
 
     @SuppressLint("SetTextI18n")
     private fun connect(device: CastDevice) {
-        statusView.text = "Connecting: ${device.ip}…"
+        statusView.text = "Connecting: ${device.friendlyName.ifBlank { device.ip }}…"
         DlnaController.describe(device.descriptionUrl) { ep ->
             runOnUiThread {
-                if (ep == null) {
-                    if (carMode && connectTries < 40) {
-                        // The phone can take a while to join the car's Wi-Fi after getting in.
-                        connectTries++
-                        statusView.text = "Car mode: waiting for the car's Wi-Fi…"
-                        android.os.Handler(mainLooper).postDelayed({ connect(device) }, 3000)
-                        return@runOnUiThread
-                    }
-                    statusView.text = "Connection failed, tap to search again"
-                    addRefreshButton()
-                } else {
-                    endpoints = ep
-                    getPreferences(MODE_PRIVATE).edit()
-                        .putString("last_tv_ip", device.ip)
-                        .putString("last_tv_desc", device.descriptionUrl)
-                        .apply()
-                    deviceButton.text = "Connected: ${ep.friendlyName}"
-                    deviceButton.visibility = View.VISIBLE
-                    statusView.text = "Choose a video on your phone to cast"
-                    pickButton.visibility = View.VISIBLE
-                    mirrorButton.visibility = View.VISIBLE
-                    qualityButton.visibility = View.VISIBLE
-                    soundButton.visibility = View.VISIBLE
-                    urlButton.visibility = View.VISIBLE
-                    carButton.visibility = View.VISIBLE
-                    refreshButton?.let { removeView(it) }
-                    if (MirrorService.isRunning) {
-                        statusView.text = "Mirroring to ${ep.friendlyName}"
-                        controlsRow.visibility = View.VISIBLE
-                    } else if (carMode && !carModeStarted) {
-                        carModeStarted = true
-                        statusView.text = "Car mode: starting…"
-                        startMirrorFlow()
-                    }
+                if (!alive()) return@runOnUiThread
+                if (ep != null) { connected(device, ep); return@runOnUiThread }
+                EventLog.add("Couldn't connect to ${device.descriptionUrl}")
+                if (carMode && System.currentTimeMillis() < carDeadline) {
+                    statusView.text = "Car mode: waiting for the car's display…"
+                    handler.postDelayed({ connectSaved() }, 3000)
+                    return@runOnUiThread
                 }
+                statusView.text = "Connection failed, tap to search again"
+                addRefreshButton()
             }
+        }
+    }
+
+    @SuppressLint("SetTextI18n")
+    private fun connected(device: CastDevice, ep: RendererEndpoints) {
+        EventLog.add("Connected to ${ep.friendlyName} at ${device.descriptionUrl}")
+        endpoints = ep
+        spinner.visibility = View.GONE
+        getPreferences(MODE_PRIVATE).edit()
+            .putString("last_tv_ip", device.ip)
+            .putString("last_tv_desc", device.descriptionUrl)
+            .putString("last_tv_name", ep.friendlyName)
+            .apply()
+        deviceButton.text = "Connected: ${ep.friendlyName}"
+        deviceButton.visibility = View.VISIBLE
+        statusView.text = "Choose a video on your phone to cast"
+        pickButton.visibility = View.VISIBLE
+        mirrorButton.visibility = View.VISIBLE
+        qualityButton.visibility = View.VISIBLE
+        soundButton.visibility = View.VISIBLE
+        urlButton.visibility = View.VISIBLE
+        carButton.visibility = View.VISIBLE
+        refreshButton?.let { removeView(it) }
+        removeManual()
+        if (MirrorService.isRunning) {
+            statusView.text = "Mirroring to ${ep.friendlyName}"
+            controlsRow.visibility = View.VISIBLE
+        } else if (carMode && !carModeStarted) {
+            carModeStarted = true
+            statusView.text = "Car mode: starting…"
+            startMirrorFlow()
         }
     }
 
@@ -487,11 +593,14 @@ class MainActivity : Activity() {
             DlnaController.playLiveStream(e, "http://$ip:8080/live.ts?k=$token", "Screen mirror") { ok ->
                 runOnUiThread {
                     if (ok) {
+                        EventLog.add("Mirroring to ${e.friendlyName} (${mirrorQuality().title}, stream at $ip)")
                         statusView.text = "Mirroring phone screen to display"
                         controlsRow.visibility = View.VISIBLE
                         if (carMode) openWaze()
                     } else {
-                        showReport("Display refused the mirror stream", DlnaController.takeErrorLog().ifBlank { DlnaController.lastError } + "\n\n" + DlnaController.info)
+                        val why = DlnaController.takeErrorLog().ifBlank { DlnaController.lastError }
+                        EventLog.add("Display refused the mirror stream: ${why.take(300)}")
+                        showReport("Display refused the mirror stream", why + "\n\n" + DlnaController.info)
                     }
                 }
             }
@@ -616,11 +725,111 @@ class MainActivity : Activity() {
         super.onNewIntent(intent)
         setIntent(intent)
         if (intent.action != ACTION_CAR_MODE) return
+        EventLog.add("Car mode started (app was open)")
+        val wasCarMode = carMode
         carMode = true
+        carDeadline = System.currentTimeMillis() + CAR_WAIT_MS
         when {
             MirrorService.isRunning -> openWaze()
             endpoints != null && !carModeStarted -> { carModeStarted = true; startMirrorFlow() }
+            // Not connected and not already retrying in car mode: start looking.
+            endpoints == null && !wasCarMode -> {
+                refreshButton?.let { removeView(it) }
+                removeManual()
+                WifiRoute.ensure(userAction = true)
+                connectSaved()
+            }
         }
+    }
+
+    private fun updateCarWifiButton() {
+        carWifiButton.text = "Keep 4G internet in the car: ${if (WifiRoute.joinsCarWifi) "On" else "Off"}"
+    }
+
+    /**
+     * Lets the app join the car's Wi-Fi itself (see [WifiRoute]), so Android never uses it for
+     * internet and 4G stays on for Waze and Tidal.
+     */
+    @SuppressLint("SetTextI18n")
+    private fun chooseCarWifi() {
+        if (android.os.Build.VERSION.SDK_INT < 29) { toast("Needs Android 10 or later"); return }
+        if (MirrorService.isRunning) { toast("Stop mirroring first"); return }
+        val pad = (resources.displayMetrics.density * 20).toInt()
+        val on = WifiRoute.joinsCarWifi
+        val info = TextView(this).apply {
+            text = "The app joins the car's Wi-Fi itself, as a link to the car only. Android then " +
+                "doesn't use that Wi-Fi for internet, so Waze and Tidal keep using mobile data.\n\n" +
+                "After turning this on, forget the car's Wi-Fi in the phone's Wi-Fi settings, so the " +
+                "phone doesn't also join it the usual way. The first time, Android asks you to allow " +
+                "the connection: pick the car's Wi-Fi and tap Connect."
+            setPadding(0, 0, 0, pad / 2)
+        }
+        val ssidInput = android.widget.EditText(this).apply {
+            hint = "Car Wi-Fi name"
+            setSingleLine(true)
+            setText(WifiRoute.carWifiName ?: "Zeekr-2882_Casting")
+        }
+        val passInput = android.widget.EditText(this).apply {
+            hint = "Car Wi-Fi password"
+            setSingleLine(true)
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or
+                android.text.InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+            setText(WifiRoute.carWifiPassword)
+        }
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(pad, pad / 2, pad, 0)
+            addView(info); addView(ssidInput); addView(passInput)
+        }
+        val dialog = android.app.AlertDialog.Builder(this)
+            .setTitle("Keep 4G internet in the car")
+            .setView(android.widget.ScrollView(this).apply { addView(box) })
+            .setPositiveButton(if (on) "Save" else "Turn on") { _, _ ->
+                val ssid = ssidInput.text.toString().trim()
+                val pass = passInput.text.toString()
+                when {
+                    ssid.isEmpty() -> toast("Enter the car's Wi-Fi name")
+                    pass.isNotEmpty() && pass.length !in 8..63 -> toast("Wi-Fi passwords are 8 to 63 characters")
+                    else -> {
+                        WifiRoute.setCarWifi(this, ssid, pass)
+                        updateCarWifiButton()
+                        if (!on) offerWifiSettings(ssid)
+                    }
+                }
+            }
+            .setNegativeButton("Cancel", null)
+        if (on) dialog.setNeutralButton("Turn off") { _, _ ->
+            WifiRoute.setCarWifi(this, null, "")
+            updateCarWifiButton()
+            toast("Join the car's Wi-Fi in the phone's Wi-Fi settings again")
+        }
+        dialog.show()
+    }
+
+    private fun offerWifiSettings(ssid: String) {
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Now forget the car's Wi-Fi")
+            .setMessage("In Wi-Fi settings, tap \"$ssid\" (or its gear icon) and choose Forget. " +
+                "The app joins it from now on, whenever it's open.")
+            .setPositiveButton("Open Wi-Fi settings") { _, _ ->
+                try { startActivity(Intent(android.provider.Settings.ACTION_WIFI_SETTINGS)) } catch (_: Exception) {}
+            }
+            .setNegativeButton("Later", null)
+            .show()
+    }
+
+    private fun showLog() {
+        val all = EventLog.read()
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Connection log")
+            .setMessage(all.takeLast(6000).ifBlank { "Nothing logged yet." })
+            .setPositiveButton("OK", null)
+            .setNeutralButton("Copy") { _, _ ->
+                val cm = getSystemService(android.content.ClipboardManager::class.java)
+                cm.setPrimaryClip(android.content.ClipData.newPlainText("ScreenShare log", all))
+                toast("Log copied")
+            }
+            .show()
     }
 
     private fun openWaze() {

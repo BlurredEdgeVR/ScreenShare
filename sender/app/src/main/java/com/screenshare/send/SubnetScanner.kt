@@ -17,7 +17,10 @@ object SubnetScanner {
     private val pool = Executors.newFixedThreadPool(64)
 
     fun scan(onResult: (List<String>) -> Unit) {
-        val wifiIp = wifiInterfaceIp()
+        // Report once: either when every probe is done or after 6 s, whichever comes first.
+        val reported = java.util.concurrent.atomic.AtomicBoolean(false)
+        val report = { ips: List<String> -> if (reported.compareAndSet(false, true)) onResult(ips) }
+        val wifiIp = WifiRoute.localIp() ?: if (WifiRoute.joinsCarWifi) null else wifiInterfaceIp()
         val bases = LinkedHashSet<String>()
         if (wifiIp != null) {
             val parts = wifiIp.split(".")
@@ -25,7 +28,7 @@ object SubnetScanner {
         }
         val found = java.util.Collections.synchronizedList(mutableListOf<String>())
         val pending = AtomicInteger(bases.size * 254)
-        if (pending.get() == 0) { onResult(emptyList()); return }
+        if (pending.get() == 0) { report(emptyList()); return }
         for (base in bases) {
             for (i in 1..254) {
                 val ip = base + i
@@ -39,14 +42,14 @@ object SubnetScanner {
                     } catch (_: Exception) {
                     }
                     if (pending.decrementAndGet() == 0) {
-                        onResult(found.distinct().take(20))
+                        report(found.distinct().take(20))
                     }
                 }
             }
         }
         pool.execute {
             TimeUnit.SECONDS.sleep(6)
-            onResult(found.distinct().take(20))
+            report(found.distinct().take(20))
         }
     }
 

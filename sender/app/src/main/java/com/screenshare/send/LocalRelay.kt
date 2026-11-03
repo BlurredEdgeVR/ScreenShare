@@ -148,6 +148,7 @@ object LocalRelay {
     } catch (_: Exception) { -1L }
 
     private fun localWifiIp(): String? {
+        WifiRoute.localIp()?.let { return it }
         return try {
             val en = java.net.NetworkInterface.getNetworkInterfaces()
             while (en.hasMoreElements()) {

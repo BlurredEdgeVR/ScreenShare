@@ -104,6 +104,10 @@ object MirrorServer {
     }
 
     fun localIp(): String? {
+        WifiRoute.localIp()?.let { return it }
+        // When the app joins the car's Wi-Fi itself and it isn't up, don't offer an address on
+        // some other network.
+        if (WifiRoute.joinsCarWifi) return null
         return try {
             val en = NetworkInterface.getNetworkInterfaces()
             while (en.hasMoreElements()) {
