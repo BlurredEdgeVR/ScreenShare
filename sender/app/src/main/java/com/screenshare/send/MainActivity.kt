@@ -218,6 +218,7 @@ class MainActivity : Activity() {
     }
 
     private fun stopMirroring() {
+        EventLog.add("Stop mirroring tapped in the app")
         endpoints?.let { e -> DlnaController.stop(e) { } }
         startService(Intent(this, MirrorService::class.java).apply { action = MirrorService.ACTION_STOP })
         handler.postDelayed({ if (alive()) refreshUi() }, 500)
@@ -335,32 +336,7 @@ class MainActivity : Activity() {
         return true
     }
 
-    /** Finds displays with SSDP, or by probing the Wi-Fi's /24 if nothing answers, and reads each one's name. */
-    private fun findDisplays(cb: (List<CastDevice>) -> Unit) {
-        DlnaDiscoverer.search(3000) { ssdp ->
-            if (ssdp.isNotEmpty()) describeAll(ssdp, cb)
-            // SSDP can't cross subnets or may be filtered: probe the DLNA port instead.
-            else SubnetScanner.scan { ips -> describeAll(ips.map { CastDevice("", "http://$it:49152/description.xml", it) }, cb) }
-        }
-    }
-
-    /** Keeps only the candidates that are renderers, with their names filled in. */
-    private fun describeAll(candidates: List<CastDevice>, cb: (List<CastDevice>) -> Unit) {
-        if (candidates.isEmpty()) { EventLog.add("Search found no displays"); cb(emptyList()); return }
-        val found = java.util.Collections.synchronizedList(mutableListOf<CastDevice>())
-        val left = java.util.concurrent.atomic.AtomicInteger(candidates.size)
-        for (d in candidates) {
-            DlnaController.describe(d.descriptionUrl) { ep ->
-                if (ep != null) found.add(d.copy(friendlyName = ep.friendlyName))
-                if (left.decrementAndGet() == 0) {
-                    val list = found.sortedBy { it.friendlyName }
-                    EventLog.add("Search found ${list.size} display(s)" +
-                        list.joinToString("") { "\n    ${it.friendlyName} at ${it.descriptionUrl}" })
-                    cb(list)
-                }
-            }
-        }
-    }
+    private fun findDisplays(cb: (List<CastDevice>) -> Unit) = DisplayFinder.findAll(cb)
 
     /**
      * The saved display among [found]: by name; with no name saved, by its address ignoring the
@@ -481,8 +457,38 @@ class MainActivity : Activity() {
     private val projectionLauncher = 4242
     private var pendingMirror = false
 
+    /**
+     * Checks the display still answers before asking to share the screen. When the car restarts,
+     * its displays come back on a new port, so a display found earlier may have moved; then it's
+     * found again by name.
+     */
+    @SuppressLint("SetTextI18n")
     private fun startMirrorFlow() {
         val e = endpoints ?: return
+        val saved = savedDevice()?.takeIf { it.friendlyName == e.friendlyName } ?: return askToShare()
+        statusView.text = "Checking ${e.friendlyName}…"
+        DlnaController.describe(saved.descriptionUrl) { ep ->
+            runOnUiThread {
+                if (!alive()) return@runOnUiThread
+                if (ep != null && ep.friendlyName == e.friendlyName) { endpoints = ep; askToShare(); return@runOnUiThread }
+                EventLog.add("${e.friendlyName} moved; looking for it again")
+                statusView.text = "Looking for ${e.friendlyName}…"
+                DisplayFinder.findByName(e.friendlyName) { device, found ->
+                    runOnUiThread {
+                        if (!alive()) return@runOnUiThread
+                        if (device != null && found != null) { connected(device, found); askToShare() }
+                        else {
+                            endpoints = null
+                            noDisplayFound("Couldn't find ${e.friendlyName}. Is the car's screen on?")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun askToShare() {
+        refreshUi()
         val pmgr = getSystemService(MediaProjectionManager::class.java)
         pendingMirror = true
         @Suppress("DEPRECATION")

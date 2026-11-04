@@ -75,7 +75,7 @@ class MirrorService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
             target?.let { car -> DlnaController.stop(car) { } }
-            stopSelfSafely()
+            stopSelfSafely("Stop tapped")
             return START_NOT_STICKY
         }
         if (intent?.action == ACTION_RECONNECT) {
@@ -162,7 +162,7 @@ class MirrorService : Service() {
         } catch (e: Throwable) {
             android.util.Log.e("MirrorService", "startMirror failed", e)
             CrashLog.save(this, e)
-            stopSelfSafely()
+            stopSelfSafely("couldn't start: $e")
         }
     }
 
@@ -193,7 +193,8 @@ class MirrorService : Service() {
         val pmgr = getSystemService(MediaProjectionManager::class.java)
         projection = pmgr.getMediaProjection(resultCode, data)
         projection?.registerCallback(object : MediaProjection.Callback() {
-            override fun onStop() { stopSelfSafely() }
+            // Android ended the share: "Stop sharing" in the status bar, the shared app closed, or the phone locked.
+            override fun onStop() { stopSelfSafely("Android ended the screen share") }
         }, android.os.Handler(android.os.Looper.getMainLooper()))
 
         val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, w, h).apply {
@@ -506,8 +507,8 @@ class MirrorService : Service() {
         if (sps != null && pps != null) muxer.setSpsPps(sps, pps)
     }
 
-    private fun stopSelfSafely() {
-        if (isRunning) EventLog.add("Mirroring stopped")
+    private fun stopSelfSafely(reason: String = "the service ended") {
+        if (isRunning) EventLog.add("Mirroring stopped: $reason")
         // Don't leave a prompt for the car's Wi-Fi waiting once mirroring is over.
         WifiRoute.cancelPending()
         keeper?.halt()
@@ -541,13 +542,16 @@ class MirrorService : Service() {
     }
 
     /**
-     * Gets the car back when it drops the stream (a Wi-Fi blip, or its player giving up). The
-     * capture keeps running, so it only has to tell the car to play the stream again, with no
-     * share prompt. It gives up after three tries that don't hold for 20 s (the Reconnect button
-     * starts over), and ends mirroring after 10 minutes without the car, so a phone left behind
-     * doesn't keep its screen on.
+     * Gets the car back when it drops the stream (a Wi-Fi blip, its player giving up, or the car
+     * restarting). The capture keeps running, so it only has to tell the car to play the stream
+     * again, with no share prompt. If the display doesn't answer at its old address, it's looked
+     * up again by name, since the car's displays get a new port each time it starts. Tries the car
+     * accepts but that don't hold for 20 s count towards giving up after three (the Reconnect
+     * button starts over); a display that isn't there yet (the car still starting) doesn't. It
+     * ends mirroring after 10 minutes without the car, so a phone left behind doesn't keep its
+     * screen on.
      */
-    private inner class CarKeeper(private val car: RendererEndpoints) : Thread("CarKeeper") {
+    private inner class CarKeeper(private var car: RendererEndpoints) : Thread("CarKeeper") {
         @Volatile private var running = true
         @Volatile private var reconnectRequested = false
         private var everConnected = false
@@ -592,9 +596,8 @@ class MirrorService : Service() {
             // After the app's own car Wi-Fi drops, ask for it again.
             if (WifiRoute.joinsCarWifi && WifiRoute.localIp() == null) WifiRoute.ensure(userAction = false)
             if (now - lastSeen > GIVE_UP_MS) {
-                EventLog.add("No car for 10 minutes: stopping")
                 running = false
-                android.os.Handler(android.os.Looper.getMainLooper()).post { stopSelfSafely() }
+                android.os.Handler(android.os.Looper.getMainLooper()).post { stopSelfSafely("no car for 10 minutes") }
                 return
             }
             if (!everConnected || gaveUp) return
@@ -607,13 +610,42 @@ class MirrorService : Service() {
                 show("Lost the car. Tap Reconnect to try again.")
                 return
             }
-            failures++
-            nextAttempt = now + RETRY_MS
             show("Reconnecting to the car…")
-            DlnaController.playLiveStream(car, "http://$ip:8080/live.ts?k=${MirrorServer.streamToken}", "Screen mirror") { ok ->
-                val result = if (ok) "the car accepted the stream" else "the car didn't answer (${DlnaController.lastError.take(200)})"
-                EventLog.add("Reconnect try $failures: $result")
+            val url = "http://$ip:8080/live.ts?k=${MirrorServer.streamToken}"
+            val accepted = cast(url) || (refind() && cast(url))
+            nextAttempt = System.currentTimeMillis() + RETRY_MS
+            if (accepted) {
+                failures++
+                EventLog.add("Reconnect try $failures: the car accepted the stream")
+            } else {
+                EventLog.add("Reconnect: ${car.friendlyName.ifBlank { "the display" }} isn't answering yet " +
+                    "(${DlnaController.lastError.take(120)})")
             }
+        }
+
+        /** Tells the car to play [url]; waits for its answer. */
+        private fun cast(url: String): Boolean {
+            val done = java.util.concurrent.CountDownLatch(1)
+            var ok = false
+            DlnaController.playLiveStream(car, url, "Screen mirror") { r -> ok = r; done.countDown() }
+            done.await(60, java.util.concurrent.TimeUnit.SECONDS)
+            return ok
+        }
+
+        /** Looks the display up again by name. True if it's now at a different address. */
+        private fun refind(): Boolean {
+            val name = car.friendlyName
+            if (name.isBlank()) return false
+            val done = java.util.concurrent.CountDownLatch(1)
+            var found: RendererEndpoints? = null
+            DisplayFinder.findByName(name) { _, ep -> found = ep; done.countDown() }
+            done.await(20, java.util.concurrent.TimeUnit.SECONDS)
+            val ep = found ?: return false
+            if (ep.avTransportControlUrl == car.avTransportControlUrl) return false
+            EventLog.add("$name moved to ${ep.avTransportControlUrl}")
+            car = ep
+            target = ep
+            return true
         }
 
         private fun show(text: String) {
