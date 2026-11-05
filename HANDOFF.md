@@ -122,6 +122,25 @@ to act like a slow car.
   against the stand-in in each state (not connected, connected, mirroring, stopped, sideways).
   Dark text on the amber button draws as #64503A rather than #2A1600 on this phone, even with
   a dark theme and force-dark off. It's still about 4.8:1 contrast.
+- **Third drive (4 Nov, about 5 h, several stops), from `files/events.log`:**
+  - App-joined car Wi-Fi worked. Android asked once; every later start joined silently.
+    Internet went over mobile data. Mobile data dropped and came back every few seconds for
+    the first 20 minutes, then stayed steady. Likely weak O2 roaming signal; auto data switching
+    between SIMs is off.
+  - The display was found by search every time. The car gave it a new port on each start
+    (32769, 40641, 35351).
+  - A Wi-Fi drop at 14:16 recovered by itself in 9 s.
+  - At 11:22, after the car restarted, mirroring with the app still open got HTTP 404: it
+    still held the old port. Fixed in e1b4fdc. The app checks the display before asking to
+    share. `CarKeeper` looks the display up by name when it doesn't answer, and doesn't count
+    tries while the display isn't there yet.
+  - Mirroring stopped five times without a logged reason. The log now records it.
+- **Stand-in test of the restart fixes (4 Nov evening, phone over USB):** the stand-in was
+  restarted with a new control URL (`--boot`), and the old one returned 404 like the car.
+  `CarKeeper` found it again by name, and the car was reading again 8 s after the drop. Done
+  twice. Starting to mirror after a restart went to the new address. SSDP from the phone
+  doesn't reach the Mac on the Glamping Wi-Fi, so the stand-in's new `--ssdp` responder is
+  untested there.
 - Next: try Smoother in the car. If it still freezes often, try Lightest; the car's Wi-Fi may
   carry less than 2.5 Mbps.
 

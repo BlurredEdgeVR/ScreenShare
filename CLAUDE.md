@@ -74,6 +74,7 @@ Then `DlnaController.playLiveStream` tells the renderer to fetch that URL.
 - The car shows two displays (centre and passenger) on one IP, so the exact description URL is saved as `last_tv_desc` and its name as `last_tv_name` (for example `ZEEKR-2882_CENTER DISPLAY`). Car mode keeps looking for the saved display for 3 minutes (`CAR_WAIT_MS`).
 - `MainActivity` passes the car's control URL to `MirrorService` (`EXTRA_CONTROL_URL`). The service's `CarKeeper` thread checks every 2 s:
   - It closes connections whose writes have been stuck for 8 s (`MirrorServer.dropStalled`).
+  - When it recasts and the display doesn't answer, it looks the display up again by name (`DisplayFinder.findByName`), because the car's displays get a new port each time it starts. Tries where the display isn't there yet don't count towards giving up.
   - Once the car has connected at least once, if no display is connected for 4 s, it re-sends Stop/SetAVTransportURI/Play. It waits while Wi-Fi is down.
   - It gives up after 3 tries that don't hold for 20 s. The notification's Reconnect button starts the tries over.
   - It ends mirroring after 10 minutes without the car, so the screen wake lock isn't held forever.
@@ -108,6 +109,7 @@ Things to know about it:
 4. Run `python3 fake_display.py > display.log`. It records each stream to `recordings/N.ts` and shows it live in an ffplay window. `GET /record?rate=1200` records the current stream again, reading at 1.2 Mbps like a slow car.
 5. Tap "Screen mirror" (for example with `phone.py tap "Screen mirror"`). The user has to choose "Share entire screen" and tap Next on the phone.
 6. Run `run_test.sh display.log`. It scrolls the phone's Settings app, records once at full speed and once as a slow car, then stops mirroring.
+   `--boot NAME` puts NAME in the control URL and refuses others with 404. Restart it with a new NAME to act like the car restarting. `--ssdp` answers SSDP searches, but on the Glamping Wi-Fi the phone's searches don't reach the Mac.
 7. Run `analyze.py recordings/*.ts` to get resolution, fps, bitrate, keyframe spacing, frame gaps and decoder warnings. Warnings on the last frame come from cutting the recording off and can be ignored.
 
 Afterwards, restore the prefs backup and remove the tunnels.

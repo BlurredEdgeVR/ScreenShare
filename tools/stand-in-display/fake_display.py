@@ -9,6 +9,10 @@ The stream is fetched over Wi-Fi if reachable, else over USB:  adb forward tcp:1
 
   --rate KBPS   read the stream no faster than this (simulates a slow car); 0 = full speed
   --seconds N   stop recording after N seconds
+  --boot NAME   put NAME in the control URL and refuse any other with 404, like the car after a
+                restart (restart with a new NAME to test that the phone finds the new address)
+  --ssdp        answer SSDP searches like the car does. With --port, restarting on a new port
+                acts like the car restarting (its displays come back on a new port each time).
 """
 import argparse
 import html
@@ -16,6 +20,7 @@ import json
 import os
 import re
 import socket
+import struct
 import subprocess
 import threading
 import time
@@ -30,7 +35,7 @@ DESC = (
     '<UDN>uuid:00000000-0000-4000-8000-000000000001</UDN>'
     '<serviceList><service><serviceType>urn:schemas-upnp-org:service:AVTransport:1</serviceType>'
     '<serviceId>urn:upnp-org:serviceId:AVTransport</serviceId><SCPDURL>/AVTransport/scpd.xml</SCPDURL>'
-    '<controlURL>/AVTransport/control</controlURL><eventSubURL>/AVTransport/event</eventSubURL>'
+    '<controlURL>/AVTransport/{boot}control</controlURL><eventSubURL>/AVTransport/event</eventSubURL>'
     '</service></serviceList></device></root>'
 )
 
@@ -188,13 +193,18 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(200 if ok else 409, b"ok" if ok else b"no stream yet", "text/plain")
         elif self.path.startswith("/description.xml"):
             log("phone fetched the description")
-            self.reply(200, DESC.encode())
+            self.reply(200, DESC.replace("{boot}", f"{args.boot}/" if args.boot else "").encode())
         else:
             self.reply(404)
 
     def do_POST(self):
         n = int(self.headers.get("Content-Length") or 0)
         body = self.rfile.read(n).decode("utf-8", "replace")
+        expected = f"/AVTransport/{args.boot}/control" if args.boot else "/AVTransport/control"
+        if urllib.parse.urlsplit(self.path).path != expected:
+            log(f"404 for old control URL {self.path}")
+            self.reply(404)
+            return
         action = (self.headers.get("SOAPACTION") or "").strip().strip('"').split("#")[-1]
         log(f"SOAP {action}")
         extra = ""
@@ -218,6 +228,34 @@ class Handler(BaseHTTPRequestHandler):
         self.reply(200, resp.encode())
 
 
+def ssdp_responder():
+    """Answers M-SEARCH on 239.255.255.250:1900 with this display's description URL."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    if hasattr(socket, "SO_REUSEPORT"):
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+    s.bind(("", 1900))
+    mreq = struct.pack("4s4s", socket.inet_aton("239.255.255.250"), socket.inet_aton("0.0.0.0"))
+    s.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+    while True:
+        data, addr = s.recvfrom(4096)
+        if not data.startswith(b"M-SEARCH"):
+            continue
+        # Our address on the way back to the phone.
+        probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        probe.connect(addr)
+        my_ip = probe.getsockname()[0]
+        probe.close()
+        resp = (
+            "HTTP/1.1 200 OK\r\nCACHE-CONTROL: max-age=1800\r\nEXT:\r\n"
+            f"LOCATION: http://{my_ip}:{args.port}/description.xml\r\n"
+            "SERVER: fake/1.0 UPnP/1.0\r\nST: urn:schemas-upnp-org:device:MediaRenderer:1\r\n"
+            "USN: uuid:00000000-0000-4000-8000-000000000001::urn:schemas-upnp-org:device:MediaRenderer:1\r\n\r\n"
+        )
+        s.sendto(resp.encode(), addr)
+        log(f"SSDP: answered {addr[0]} with port {args.port}")
+
+
 def main():
     global args
     p = argparse.ArgumentParser()
@@ -226,12 +264,16 @@ def main():
     p.add_argument("--rate", type=float, default=0, help="max read speed in kbit/s, 0 = unlimited")
     p.add_argument("--seconds", type=float, default=20)
     p.add_argument("--no-watch", dest="watch", action="store_false", help="don't open a viewer window")
+    p.add_argument("--ssdp", action="store_true", help="answer SSDP searches")
+    p.add_argument("--boot", default="", help="name in the control URL; others get 404")
     p.add_argument("--out", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "recordings"))
     args = p.parse_args()
     os.makedirs(args.out, exist_ok=True)
     state["n"] = len([f for f in os.listdir(args.out) if f.endswith(".ts")])
     log(f"fake display on :{args.port}, rate={'unlimited' if not args.rate else f'{args.rate:.0f} kbit/s'}, "
         f"{args.seconds:.0f}s per recording, saving to {args.out}")
+    if args.ssdp:
+        threading.Thread(target=ssdp_responder, daemon=True).start()
     ThreadingHTTPServer(("0.0.0.0", args.port), Handler).serve_forever()
 
 

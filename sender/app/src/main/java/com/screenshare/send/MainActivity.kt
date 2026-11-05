@@ -30,6 +30,7 @@ class MainActivity : Activity() {
     private var carModeStarted = false
     private var carDeadline = 0L
     private var wifiWaitUntil = 0L
+    private var wifiWasOff = false
     private val handler = android.os.Handler(android.os.Looper.getMainLooper())
     private var endpoints: RendererEndpoints? = null
     private lateinit var statusTitle: TextView
@@ -262,6 +263,10 @@ class MainActivity : Activity() {
 
     private fun alive() = !isFinishing && !isDestroyed
 
+    private fun wifiOn(): Boolean = try {
+        applicationContext.getSystemService(android.net.wifi.WifiManager::class.java)?.isWifiEnabled != false
+    } catch (_: Exception) { true }
+
     /** The display used last time, if any. */
     private fun savedDevice(): CastDevice? {
         val prefs = getPreferences(MODE_PRIVATE)
@@ -325,6 +330,23 @@ class MainActivity : Activity() {
      */
     @SuppressLint("SetTextI18n")
     private fun waitForCarWifi(then: () -> Unit): Boolean {
+        if (WifiRoute.joinsCarWifi && !wifiOn()) {
+            // The app joins the car's Wi-Fi through the phone's Wi-Fi, so wait until it's on.
+            if (!wifiWasOff) EventLog.add("Wi-Fi is off; waiting for it")
+            wifiWasOff = true
+            statusView.text = "Wi-Fi is off. Turn it on so the app can join the car's Wi-Fi."
+            notFound = false
+            refreshUi()
+            handler.postDelayed({ if (alive()) then() }, 1000)
+            return true
+        }
+        if (wifiWasOff) {
+            // Ask again now that Wi-Fi is on, in case the earlier request went nowhere.
+            wifiWasOff = false
+            wifiWaitUntil = 0
+            WifiRoute.cancelPending()
+            WifiRoute.ensure(userAction = true)
+        }
         if (!WifiRoute.joiningCarWifi) { wifiWaitUntil = 0; return false }
         val now = System.currentTimeMillis()
         if (wifiWaitUntil == 0L) wifiWaitUntil = now + WIFI_WAIT_MS
